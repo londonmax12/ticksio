@@ -21,7 +21,7 @@ The `.ticks` file format provides an efficient storage solution for tick-level f
 | `ticker` | char[8] | Instrument code (e.g., `GBPJPY` or `AAPL`) |
 | `currency` | char[3] | ISO currency code (e.g., `USD`) |
 | `asset_class` | uint16 | Enum for asset class |
-| `exchange_id` | uint16 | Enum for exchange |
+| `country_code` | char[2] | ISO country code (e.g., `AU`) |
 | `compression_type` | uint16 | Enum for compression algorithm |
 | `index_offset` | uint64 | Byte offset to index section |
 
