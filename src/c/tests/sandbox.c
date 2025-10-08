@@ -18,7 +18,7 @@ int main() {
     my_header.asset_class = 10;
     my_header.compression_type = 0;
 
-    ticks_file_t *create_handle = ticks_create(test_filename, &my_header);
+    ticks_file_t* create_handle = ticks_create(test_filename, &my_header);
 
     if (create_handle == NULL) {
         print_error("ticks_create");
@@ -32,7 +32,7 @@ int main() {
     }
 
     printf("\n--- Opening File ---\n");
-    ticks_file_t *read_handle = ticks_open(test_filename);
+    ticks_file_t* read_handle = ticks_open(test_filename);
 
     if (read_handle == NULL) {
         print_error("ticks_open");
@@ -52,6 +52,19 @@ int main() {
         printf(" - Compression Type: %hu\n", ticks_header.compression_type);
     } else {
         print_error("ticks_get_asset_class");
+    }
+
+    printf("Index Offset and Size:\n");
+    uint64_t index_offset, index_size;
+    if (ticks_get_index_offset(read_handle, &index_offset) == 0) {
+        printf(" - Index Offset: %llu\n", (unsigned long long)index_offset);
+    } else {
+        print_error("ticks_get_index_offset");
+    }
+    if (ticks_get_index_size(read_handle, &index_size) == 0) {
+        printf(" - Index Size: %llu\n", (unsigned long long)index_size);
+    } else {
+        print_error("ticks_get_index_size");
     }
 
     printf("\n--- Closing File ---\n");

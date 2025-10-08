@@ -10,7 +10,8 @@
 struct ticks_file_t_internal {
     FILE *file_stream;  // The hidden file pointer
     ticks_header_t header; // The hidden file header (contains all data)
-    // Add other internal state here as needed
+    uint64_t index_offset; // Byte offset where the index data starts in the file
+    uint64_t index_size;   // Size of the index data in bytes
 };
 
 
@@ -18,17 +19,32 @@ struct ticks_file_t_internal {
 static int write_initial_data(FILE *file, const ticks_header_t *header) {
     size_t magic_len = strlen(TICKS_MAGIC);
     
-    // 1. Write the Magic Number
     if (fwrite(TICKS_MAGIC, 1, magic_len, file) != magic_len) {
-        return -1; // Write failed
+        return -1;
     }
 
-    // 2. Write the Header Structure
     if (fwrite(header, 1, sizeof(ticks_header_t), file) != sizeof(ticks_header_t)) {
-        return -1; // Write failed
+        return -1;
     }
     
-    return 0; // Success
+    long current_offset_long = ftell(file);
+    if (current_offset_long == -1L) {
+        return -1;
+    }
+
+    uint64_t index_start_offset = (uint64_t)current_offset_long;
+    if (fwrite(&index_start_offset, 1, sizeof(uint64_t), file) != sizeof(uint64_t)) {
+        return -1;
+    }
+
+    
+    // Index size is initially zero, a temporary placeholder is used to safely pass 0 value
+    uint64_t zero_placeholder = 0;
+    if (fwrite(&zero_placeholder, 1, sizeof(uint64_t), file) != sizeof(uint64_t)) {
+        return -1;
+    }
+
+    return 0;
 }
 
 // --- API Implementation ---
@@ -39,31 +55,34 @@ ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
         return NULL;
     }
 
-    // 1. Allocate memory for the internal handle structure
+    // Allocate memory for the internal handle structure
     struct ticks_file_t_internal *handle = malloc(sizeof(struct ticks_file_t_internal));
     if (handle == NULL) {
+        printf("Failed to allocate memory: %s\n", strerror(errno));
         return NULL; // errno is set by malloc
     }
 
-    // 2. Open the file for writing (binary mode)
+    // Open the file for writing (binary mode)
     handle->file_stream = fopen(filename, "wb");
     if (handle->file_stream == NULL) {
+        printf("Failed to open file: %s\n", strerror(errno));
         free(handle);
         return NULL; // errno is set by fopen
     }
 
-    // 3. Write data to the file
+    // Write data to the file
     if (write_initial_data(handle->file_stream, header) != 0) {
+        printf("Failed to write initial data: %s\n", strerror(errno));
         fclose(handle->file_stream);
         free(handle);
         errno = EIO; 
         return NULL;
     }
     
-    // 4. Store a copy of the header internally
+    // Store a copy of the header internally
     handle->header = *header;
     
-    // 5. Keep the file open for subsequent writes/reads, or close and reopen in 'rb+'/'ab' mode.
+    // Keep the file open for subsequent writes/reads, or close and reopen in 'rb+'/'ab' mode.
     // For simplicity, we'll close it here and rely on ticks_open for reading.
     fclose(handle->file_stream);
     handle->file_stream = NULL; 
@@ -78,20 +97,20 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
 
-    // 1. Allocate memory for the internal handle structure
+    // Allocate memory for the internal handle structure
     struct ticks_file_t_internal *handle = malloc(sizeof(struct ticks_file_t_internal));
     if (handle == NULL) {
         return NULL;
     }
 
-    // 2. Open the file for reading (binary mode)
+    // Open the file for reading (binary mode)
     handle->file_stream = fopen(filename, "rb");
     if (handle->file_stream == NULL) {
         free(handle);
         return NULL;
     }
     
-    // 3. Read and Validate the Magic Number
+    // Read and Validate the Magic Number
     char magic_buffer[sizeof(TICKS_MAGIC)];
     size_t magic_len = strlen(TICKS_MAGIC); 
 
@@ -110,7 +129,7 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
     
-    // 4. Read the Header Structure into the internal state
+    // Read the Header Structure into the internal state
     if (fread(&handle->header, 1, sizeof(ticks_header_t), handle->file_stream) != sizeof(ticks_header_t)) {
         // Read error or file truncated
         fclose(handle->file_stream);
@@ -119,7 +138,16 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
 
-    // 5. Success
+    // Read the Index Offset and Size
+    if (fread(&handle->index_offset, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t) ||
+        fread(&handle->index_size, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t))
+    {
+        fclose(handle->file_stream);
+        free(handle);
+        errno = EILSEQ;
+        return NULL;
+    }
+
     return (ticks_file_t*)handle;
 }
 
@@ -145,8 +173,29 @@ int ticks_get_header(ticks_file_t *handle, ticks_header_t *out_asset_class) {
         return -1;
     }
 
-    // Access the internal state
     *out_asset_class = handle->header;
+    
+    return 0;
+}
+
+int ticks_get_index_offset(ticks_file_t *handle, uint64_t *out_offset) {
+    if (handle == NULL || out_offset == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *out_offset = handle->index_offset;
+    
+    return 0;
+}
+
+int ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size) {
+    if (handle == NULL || out_size == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *out_size = handle->index_size;
     
     return 0;
 }

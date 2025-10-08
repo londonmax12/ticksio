@@ -57,4 +57,19 @@ int ticks_close(ticks_file_t *handle);
  */
 int ticks_get_header(ticks_file_t *handle, ticks_header_t *out_asset_class);
 
+/**
+ * @brief Retrieves the index offset from the file handle.
+ * @param handle The file stream handle.
+ * @param out_offset Pointer to store the result.
+ * @return 0 on success, -1 on failure.
+ */
+int ticks_get_index_offset(ticks_file_t *handle, uint64_t *out_offset);
+/**
+ * @brief Retrieves the index size from the file handle.
+ * @param handle The file stream handle.
+ * @param out_size Pointer to store the result.
+ * @return 0 on success, -1 on failure.
+ */
+int ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size);
+
 #endif // TICKSIO_H
