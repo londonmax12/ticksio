@@ -24,6 +24,7 @@ The `.ticks` file format provides an efficient storage solution for tick-level f
 | `country_code` | char[2] | ISO country code (e.g., `AU`) |
 | `compression_type` | uint16 | Enum for compression algorithm |
 | `index_offset` | uint64 | Byte offset to index section |
+| `index_size` | uint64 | Byte size of index section
 
 ---
 
