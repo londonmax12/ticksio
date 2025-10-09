@@ -84,11 +84,14 @@ int main() {
 
     while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
         for (uint64_t i = 0; i < reader.records_in_buffer; i++) {
-            TradeData* trade = &reader.buffer[i];
+            trade_data_t* trade = &reader.buffer[i];
             printf("Trade %llu: Time: %lld, Price: %.2f, Volume: %d\n", 
-                   (unsigned long long)(reader.current_chunk - 1) * 10000 + i + 1,
-                   trade->ms_since_epoch, trade->price, trade->volume);
-        }
+                (uint64_t)(reader.current_chunk - 1) * 10000 + i + 1,
+                trade->ms_since_epoch,
+                trade->price,
+                trade->volume
+            );
+}
         
         if (reader.is_full_load) break;
     }

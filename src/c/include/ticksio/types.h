@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include "constants.h"
 
+typedef struct {
+    uint64_t ms_since_epoch;
+    uint64_t price;
+    uint64_t volume;
+} trade_data_t;
+
 // Compression
 typedef uint16_t compression_type_e;
 enum {

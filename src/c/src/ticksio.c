@@ -80,7 +80,7 @@ ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
     }
 
     // Allocate memory for the internal handle structure
-    struct ticks_file_t_internal *handle = malloc(sizeof(struct ticks_file_t_internal));
+    struct ticks_file_t_internal* handle = malloc(sizeof(struct ticks_file_t_internal));
     if (handle == NULL) {
         printf("Failed to allocate memory: %s\n", strerror(errno));
         return NULL; // errno is set by malloc
