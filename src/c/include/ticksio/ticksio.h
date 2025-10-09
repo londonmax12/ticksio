@@ -3,21 +3,8 @@
 
 #include <stdint.h>
 
-// --- PUBLIC CONSTANTS ---
-#define TICKS_MAGIC "TICK"
-#define TICKS_TICKER_SIZE 8
-#define TICKS_CURRENCY_SIZE 3
-#define TICKS_COUNTRY_SIZE 2
-
-// --- PUBLIC DATA STRUCTURE (Input/Output only) ---
-// This is used when the user creates a file.
-typedef struct {
-    char ticker[TICKS_TICKER_SIZE];
-    char currency[TICKS_CURRENCY_SIZE];
-    uint16_t asset_class;
-    char country[TICKS_COUNTRY_SIZE];
-    uint16_t compression_type; // The library handles this internally
-} ticks_header_t;
+#include "ticksio/constants.h"
+#include "ticksio/types.h"
 
 // --- OPAQUE TYPE DECLARATION (The Handle) ---
 

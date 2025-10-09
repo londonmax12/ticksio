@@ -1,19 +1,6 @@
-#include "ticksio.h"
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <stdlib.h> // Required for malloc and free
+#include "ticksio/ticksio.h"
 
-// --- INTERNAL (HIDDEN) STRUCTURE DEFINITION ---
-// This is defined ONLY here in the .c file.
-// Its contents are invisible to external code.
-struct ticks_file_t_internal {
-    FILE *file_stream;  // The hidden file pointer
-    ticks_header_t header; // The hidden file header (contains all data)
-    uint64_t index_offset; // Byte offset where the index data starts in the file
-    uint64_t index_size;   // Size of the index data in bytes
-};
-
+#include "ticksio/ticksio_internal.h"
 
 // Helper function to write the magic and header
 static int write_initial_data(FILE *file, const ticks_header_t *header) {
@@ -47,6 +34,42 @@ static int write_initial_data(FILE *file, const ticks_header_t *header) {
     return 0;
 }
 
+// Helper function to read the index table
+static int read_index_table(FILE *file, struct ticks_file_t_internal *handle) {
+    if (!file || !handle || handle->index_offset == 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    // Initialize index entries to NULL
+    handle->index.entries = NULL;
+
+    if (handle->index_size == 0)
+        return 0; // No entries to reads
+
+    // Allocate memory for the index entries
+    uint32_t num_entries = handle->index_size / sizeof(ticks_index_entry_t);
+    handle->index.num_entries = num_entries;
+    handle->index.entries = malloc(handle->index_size);
+
+    if (handle->index.entries == NULL)
+        return -1; // errno is set by malloc
+
+    // Move file pointer to the index offset
+    if (fseek(file, handle->index_offset, SEEK_SET) != 0) {
+        free(handle->index.entries);
+        handle->index.entries = NULL;
+        return -1; // errno is set by fseek
+    }
+
+    // Read index entries to memory
+    if (fread(handle->index.entries, 1, handle->index_size, file) != handle->index_size) {
+        free(handle->index.entries);
+        handle->index.entries = NULL;
+        return -1; // errno is set by fread
+    }
+    return 0;
+}
 // --- API Implementation ---
 
 ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
@@ -148,6 +171,8 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
 
+    read_index_table(handle->file_stream, handle);
+
     return (ticks_file_t*)handle;
 }
 
@@ -159,6 +184,14 @@ int ticks_close(ticks_file_t *handle) {
     
     // Try to close the internal file stream if it's open
     int status = (handle->file_stream != NULL) ? fclose(handle->file_stream) : 0;
+    
+
+    // Free index entries if allocated
+    if (handle->index.entries != NULL) {
+        free(handle->index.entries);
+        handle->index.entries = NULL;
+        handle->index.num_entries = 0;
+    }
     
     // Free the dynamically allocated handle structure
     free(handle);
