@@ -1,4 +1,6 @@
-#include "ticksio.h"
+#include "ticksio/ticksio.h"
+#include "ticksio/csv.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -22,7 +24,7 @@ int main() {
 
     if (create_handle == NULL) {
         print_error("ticks_create");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     printf("File created successfully: %s\n", test_filename);
@@ -36,7 +38,7 @@ int main() {
 
     if (read_handle == NULL) {
         print_error("ticks_open");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     printf("File opened successfully.\n");
@@ -70,11 +72,29 @@ int main() {
     printf("\n--- Closing File ---\n");
     if (ticks_close(read_handle) != 0) {
         print_error("ticks_close (read)");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     printf("File closed and handle freed successfully.\n");
     
+    printf("\n--- Reading CSV ---\n");
+
+    csv_read_result_t reader;
+    memset(&reader, 0, sizeof(reader));
+
+    while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
+        for (uint64_t i = 0; i < reader.records_in_buffer; i++) {
+            TradeData* trade = &reader.buffer[i];
+            printf("Trade %llu: Time: %lld, Price: %.2f, Volume: %d\n", 
+                   (unsigned long long)(reader.current_chunk - 1) * 10000 + i + 1,
+                   trade->ms_since_epoch, trade->price, trade->volume);
+        }
+        
+        if (reader.is_full_load) break;
+    }
+
+    csv_reader_cleanup(&reader);
+
     remove(test_filename);
 
     return 0;
