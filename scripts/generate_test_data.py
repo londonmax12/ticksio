@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
-def generate_random_tick_data(num_ticks, start_time, base_price, price_std_dev, max_volume):
+def generate_random_tick_data_fast(num_ticks, start_time, base_price, price_std_dev, max_volume):
     """
-    Generates random tick data for a specified number of ticks.
+    Generates random tick data using a fast, vectorized approach.
 
     :param num_ticks: Number of ticks to generate.
     :param start_time: The starting datetime for the data.
@@ -13,25 +13,22 @@ def generate_random_tick_data(num_ticks, start_time, base_price, price_std_dev, 
     :param max_volume: The maximum volume for a single tick.
     :return: A pandas DataFrame with the generated data.
     """
-    timestamps = []
-    prices = []
-    volumes = []
+    # 1. Generate all price changes at once and create a random walk with cumsum()
+    price_changes = np.random.normal(0, price_std_dev, size=num_ticks)
+    prices = base_price + np.cumsum(price_changes)
+    # Apply the floor to all values. This is much faster than checking in a loop.
+    prices = np.maximum(0.01, prices)
 
-    current_time = start_time
-    for i in range(num_ticks):
-        delay_ms = np.random.randint(1, 101)
-        current_time += timedelta(milliseconds=delay_ms)
-        timestamps.append(current_time)
+    # 2. Generate all time delays, get the cumulative sum, and create timestamps
+    delays_ms = np.random.randint(1, 101, size=num_ticks)
+    cumulative_delays_ms = np.cumsum(delays_ms)
+    # Use pandas' fast to_timedelta to convert all at once
+    timestamps = pd.to_datetime(start_time) + pd.to_timedelta(cumulative_delays_ms, unit='ms')
 
-    price = base_price
-    for i in range(num_ticks):
-        price_change = np.random.normal(0, price_std_dev)
-        price += price_change
-
-        prices.append(max(0.01, price))
-
+    # 3. Generate volumes (already vectorized)
     volumes = np.random.randint(1, max_volume + 1, size=num_ticks)
 
+    # 4. Create the DataFrame
     data = pd.DataFrame({
         'timestamp': timestamps,
         'price': prices,
@@ -40,22 +37,22 @@ def generate_random_tick_data(num_ticks, start_time, base_price, price_std_dev, 
 
     return data
 
-NUM_TICKS = 100000
+# --- Main script execution ---
+NUM_TICKS = 10000000
 START_TIME = datetime(2023, 10, 26, 9, 30, 0)
 BASE_PRICE = 100.00
-PRICE_STD_DEV = 0.05
+PRICE_STD_DEV = 0.5
 MAX_VOLUME = 500
 FILE_NAME = 'random_tick_data.csv'
 
-tick_data = generate_random_tick_data(
+# Use the new fast function
+tick_data = generate_random_tick_data_fast(
     NUM_TICKS,
     START_TIME,
     BASE_PRICE,
     PRICE_STD_DEV,
     MAX_VOLUME
 )
-
-tick_data = tick_data.sort_values(by='timestamp').reset_index(drop=True)
 
 try:
     tick_data.to_csv(FILE_NAME, index=False)

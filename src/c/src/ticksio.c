@@ -1,6 +1,7 @@
 #include "ticksio/ticksio.h"
 
 #include "ticksio/ticksio_internal.h"
+#include "ticksio/chunks.h"
 
 // Helper function to write the magic and header
 static int write_initial_data(FILE *file, struct ticks_file_t_internal* handle) {
@@ -71,6 +72,7 @@ static int read_index_table(FILE *file, struct ticks_file_t_internal* handle) {
 
     return EXIT_SUCCESS;
 }
+
 // --- API Implementation ---
 
 ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
@@ -95,7 +97,7 @@ ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
     }
 
     // Write data to the file
-    if (write_initial_data(handle->file_stream, handle) != 0) {
+    if (write_initial_data(handle->file_stream, (struct ticks_file_t_internal*)handle) != 0) {
         printf("Failed to write initial data: %s\n", strerror(errno));
         fclose(handle->file_stream);
         free(handle);
@@ -231,5 +233,19 @@ int ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size) {
 
     *out_size = handle->index_size;
     
+    return EXIT_SUCCESS;
+}
+
+int ticks_add_data(ticks_file_t *handle, const trade_data_t *data, uint64_t num_entries) {
+    if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL) {
+        errno = EINVAL;
+        return EXIT_FAILURE;
+    }
+
+    // Create chunks from the provided data
+    if (create_chunks(handle, (trade_data_t*)data, num_entries) != EXIT_SUCCESS) {
+        return EXIT_FAILURE; // errno is set by create_chunks
+    }
+
     return EXIT_SUCCESS;
 }

@@ -62,4 +62,18 @@ typedef struct {
     ticks_index_entry_t* entries;
 } ticks_index_t;
 
+// Chunk structures
+typedef struct {
+    uint64_t time_base;
+    uint32_t num_records;
+    size_e timestamp_size;
+    size_e price_size;
+    size_e volume_size;
+    uint8_t* data;
+    uint32_t data_size;
+} ticks_chunk_t;
+
+// Opaque handle type
+typedef struct ticks_file_t_internal ticks_file_t;
+
 #endif // TICKS_TYPES_H

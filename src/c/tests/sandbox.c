@@ -68,6 +68,21 @@ int main() {
     } else {
         print_error("ticks_get_index_size");
     }
+    
+    printf("\n--- Reading CSV ---\n");
+    
+    csv_read_result_t reader;
+    memset(&reader, 0, sizeof(reader));
+    
+    while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
+        ticks_add_data(read_handle, reader.buffer, reader.records_in_buffer);
+        
+        if (reader.is_full_load) break;
+    }
+    
+    csv_reader_cleanup(&reader);
+    
+    remove(test_filename);
 
     printf("\n--- Closing File ---\n");
     if (ticks_close(read_handle) != 0) {
@@ -77,28 +92,5 @@ int main() {
 
     printf("File closed and handle freed successfully.\n");
     
-    printf("\n--- Reading CSV ---\n");
-
-    csv_read_result_t reader;
-    memset(&reader, 0, sizeof(reader));
-
-    while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
-        for (uint64_t i = 0; i < reader.records_in_buffer; i++) {
-            trade_data_t* trade = &reader.buffer[i];
-            printf("Trade %llu: Time: %lld, Price: %.2f, Volume: %d\n", 
-                (uint64_t)(reader.current_chunk - 1) * 10000 + i + 1,
-                trade->ms_since_epoch,
-                trade->price,
-                trade->volume
-            );
-}
-        
-        if (reader.is_full_load) break;
-    }
-
-    csv_reader_cleanup(&reader);
-
-    remove(test_filename);
-
-    return 0;
+    return EXIT_SUCCESS;
 }

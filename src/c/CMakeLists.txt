@@ -7,9 +7,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_library(ticksio STATIC
     src/ticksio.c
     src/csv.c
+    src/helpers.c
+    src/chunks.c
 )
 
 target_include_directories(ticksio PUBLIC include)
+target_include_directories(ticksio PRIVATE include/ticksio)
 
 add_executable(sandbox tests/sandbox.c)
 

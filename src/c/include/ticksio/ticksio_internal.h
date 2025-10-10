@@ -8,15 +8,15 @@
 
 #include "ticksio/types.h"
 
-// --- INTERNAL (HIDDEN) STRUCTURE DEFINITION ---
-// This is defined ONLY here in the .c file.
-// Its contents are invisible to external code.
+// --- INTERNAL STRUCTURE DEFINITION ---
 struct ticks_file_t_internal {
     FILE *file_stream;  // The hidden file pointer
-    ticks_header_t header; // The hidden file header (contains all data)
+    ticks_header_t header; // The hidden file header
     uint64_t index_offset; // Byte offset where the index data starts in the file
     uint64_t index_size;   // Size of the index data in bytes
     ticks_index_t index;   // The in-memory index structure
+    ticks_chunk_t* chunks; // The in-memory chunk structures
+    uint32_t num_chunks;   // Number of chunks in the chunks array
 };
 
 #endif // TICKSIO_INTERNAL_H
