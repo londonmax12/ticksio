@@ -69,30 +69,41 @@ int main() {
     ticks_header_t ticks_header;
 
     if (ticks_get_header(read_handle, &ticks_header) == 0) {
-        printf("Header Information:\n");
-        printf(" - Asset Class: %hu\n", ticks_header.asset_class);
-        printf(" - Ticker: %s\n", ticks_header.ticker);
-        printf(" - Currency: %s\n", ticks_header.currency);
-        printf(" - Country: %s\n", ticks_header.country);
-        printf(" - Compression Type: %hu\n", ticks_header.compression_type);
+        printf("= Header Information: =\n");
+        printf("├── Asset Class: %hu\n", ticks_header.asset_class);
+        printf("├── Ticker: %s\n", ticks_header.ticker);
+        printf("├── Currency: %s\n", ticks_header.currency);
+        printf("├── Country: %s\n", ticks_header.country);
+        printf("└── Compression Type: %hu\n", ticks_header.compression_type);
     } else {
         print_error("ticks_get_asset_class");
     }
 
-    printf("Index Offset and Size:\n");
+    printf("= Index: =\n");
     uint64_t index_offset, index_size;
     if (ticks_get_index_offset(read_handle, &index_offset) == 0) {
-        printf(" - Index Offset: %llu\n", (unsigned long long)index_offset);
+        printf("├── Index Offset: %llu\n", (unsigned long long)index_offset);
     } else {
         print_error("ticks_get_index_offset");
     }
     if (ticks_get_index_size(read_handle, &index_size) == 0) {
-        printf(" - Index Size: %llu\n", (unsigned long long)index_size);
+        if (index_size == 0)
+            printf("└── Index Size: %llu\n", (unsigned long long)index_size);
+        else
+            printf("├── Index Size: %llu (%llu Entries)\n", (unsigned long long)index_size , (unsigned long long)(index_size / sizeof(ticks_index_entry_t)));
     } else {
         print_error("ticks_get_index_size");
     }
+    if (index_size > 0 && read_handle->index.entries != NULL) {
+        printf("└── First Index Entry:\n");
+        printf("    ├── Time Base: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_time_base);
+        printf("    ├── Offset: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_offset);
+        printf("    ├── Size: %u\n", read_handle->index.entries[0].chunk_size);
+        printf("    ├── Timestamp Size: %u\n", read_handle->index.entries[0].timestamp_size);
+        printf("    ├── Price Size: %u\n", read_handle->index.entries[0].price_size);
+        printf("    └── Volume Size: %u\n", read_handle->index.entries[0].volume_size);
+    }
 
-    
     if (ticks_close(read_handle) != 0) {
         print_error("ticks_close (read)");
         return EXIT_FAILURE;

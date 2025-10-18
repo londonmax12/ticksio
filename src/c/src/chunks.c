@@ -162,6 +162,7 @@ int append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chu
     // struct does not have a field to track the allocated capacity of the index array,
     // preventing a more efficient growth strategy (e.g., doubling capacity).
     ticks_index_entry_t* new_entries = realloc(handle->index.entries, (handle->index.num_entries + 1) * sizeof(ticks_index_entry_t));
+
     if (new_entries == NULL) {
         // If realloc fails, the original handle->index.entries pointer is still valid.
         perror("ERROR: Unable to allocate memory for index entries\n");

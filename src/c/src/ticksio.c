@@ -2,6 +2,7 @@
 
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/chunks.h"
+#include "ticksio/index.h"
 
 // Helper function to write the magic and header
 static int write_initial_data(FILE *file, struct ticks_file_t_internal* handle) {
@@ -172,6 +173,7 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
 
+    // Read the Index Table into memory
     read_index_table(handle->file_stream, handle);
 
     return (ticks_file_t*)handle;
@@ -245,6 +247,11 @@ int ticks_add_data(ticks_file_t* handle, const trade_data_t* data, uint64_t num_
     // Create chunks from the provided data
     if (create_chunks(handle, (trade_data_t*)data, num_entries) != EXIT_SUCCESS) {
         return EXIT_FAILURE; // errno is set by create_chunks
+    }
+  
+    // Update the index in the file
+    if (create_index(handle) != EXIT_SUCCESS) {
+        return EXIT_FAILURE; // errno is set by create_index
     }
 
     return EXIT_SUCCESS;
