@@ -17,7 +17,8 @@ static int write_initial_data(FILE *file, struct ticks_file_t_internal* handle) 
     if (current_offset_long == -1L)
         return EXIT_FAILURE;
 
-    uint64_t index_start_offset = (uint64_t)current_offset_long;
+    // Offset after header + index_offset size (uint64_t) + index_size size (uint64_t)
+    uint64_t index_start_offset = (uint64_t)current_offset_long + sizeof(uint64_t) + sizeof (uint64_t);
     if (fwrite(&index_start_offset, 1, sizeof(uint64_t), file) != sizeof(uint64_t))
         return EXIT_FAILURE;
 
@@ -75,7 +76,7 @@ static int read_index_table(FILE *file, struct ticks_file_t_internal* handle) {
 
 // --- API Implementation ---
 
-ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
+ticks_file_t* ticks_create(const char* filename, const ticks_header_t* header) {
     if (filename == NULL || header == NULL) {
         errno = EINVAL; 
         return NULL;
@@ -96,6 +97,13 @@ ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
         return NULL; // errno is set by fopen
     }
 
+    // Store a copy of the header internally
+    handle->header.asset_class = header->asset_class;
+    strncpy(handle->header.ticker, header->ticker, TICKS_TICKER_SIZE);
+    strncpy(handle->header.currency, header->currency, TICKS_CURRENCY_SIZE);
+    strncpy(handle->header.country, header->country, TICKS_COUNTRY_SIZE);
+    handle->header.compression_type = header->compression_type;
+
     // Write data to the file
     if (write_initial_data(handle->file_stream, (struct ticks_file_t_internal*)handle) != 0) {
         printf("Failed to write initial data: %s\n", strerror(errno));
@@ -104,15 +112,7 @@ ticks_file_t* ticks_create(const char *filename, const ticks_header_t *header) {
         errno = EIO; 
         return NULL;
     }
-    
-    // Store a copy of the header internally
-    handle->header = *header;
-    
-    // Keep the file open for subsequent writes/reads, or close and reopen in 'rb+'/'ab' mode.
-    // For simplicity, we'll close it here and rely on ticks_open for reading.
-    fclose(handle->file_stream);
-    handle->file_stream = NULL; 
-
+ 
     // The handle still holds the metadata, but the file stream is closed.
     return (ticks_file_t*)handle;
 }
@@ -236,7 +236,7 @@ int ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size) {
     return EXIT_SUCCESS;
 }
 
-int ticks_add_data(ticks_file_t *handle, const trade_data_t *data, uint64_t num_entries) {
+int ticks_add_data(ticks_file_t* handle, const trade_data_t* data, uint64_t num_entries) {
     if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL) {
         errno = EINVAL;
         return EXIT_FAILURE;

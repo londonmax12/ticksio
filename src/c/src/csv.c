@@ -60,6 +60,7 @@ uint64_t count_csv_records(FILE *fp)
     
     while (fgets(buffer, sizeof(buffer), fp) != NULL) {
         // Basic validation
+        // TODO: More robust validation
         if (strlen(buffer) > 5) { // Arbitrary minimum length
             count++;
         }

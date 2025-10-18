@@ -1,5 +1,6 @@
 #include "ticksio/ticksio.h"
 #include "ticksio/csv.h"
+#include "ticksio/ticksio_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -22,16 +23,31 @@ int main() {
 
     ticks_file_t* create_handle = ticks_create(test_filename, &my_header);
 
-    if (create_handle == NULL) {
+    if (create_handle == NULL || create_handle->file_stream == NULL) {
         print_error("ticks_create");
         return EXIT_FAILURE;
     }
 
     printf("File created successfully: %s\n", test_filename);
-
-    if (ticks_close(create_handle) != 0) {
-        print_error("ticks_close (create)");
+    
+    printf("\n--- Reading CSV ---\n");
+    
+    csv_read_result_t reader;
+    memset(&reader, 0, sizeof(reader));
+    
+    while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
+        printf("Adding %llu records to ticks file...\n", reader.records_in_buffer);
+        if (ticks_add_data(create_handle, reader.buffer, reader.records_in_buffer) != EXIT_SUCCESS) {
+            print_error("ticks_add_data");
+            csv_reader_cleanup(&reader);
+            ticks_close(create_handle);
+            return EXIT_FAILURE;
+        }
+        
+        if (reader.is_full_load) break;
     }
+    
+    csv_reader_cleanup(&reader);
 
     printf("\n--- Opening File ---\n");
     ticks_file_t* read_handle = ticks_open(test_filename);
@@ -43,6 +59,7 @@ int main() {
 
     printf("File opened successfully.\n");
 
+    printf("\n--- Retrieving Read File Metadata ---\n");
     ticks_header_t ticks_header;
 
     if (ticks_get_header(read_handle, &ticks_header) == 0) {
@@ -68,29 +85,14 @@ int main() {
     } else {
         print_error("ticks_get_index_size");
     }
-    
-    printf("\n--- Reading CSV ---\n");
-    
-    csv_read_result_t reader;
-    memset(&reader, 0, sizeof(reader));
-    
-    while (read_csv("random_tick_data.csv", &reader, 10000) == CSV_READ_SUCCESS) {
-        ticks_add_data(read_handle, reader.buffer, reader.records_in_buffer);
-        
-        if (reader.is_full_load) break;
-    }
-    
-    csv_reader_cleanup(&reader);
-    
-    remove(test_filename);
 
-    printf("\n--- Closing File ---\n");
+    
     if (ticks_close(read_handle) != 0) {
         print_error("ticks_close (read)");
         return EXIT_FAILURE;
     }
 
-    printf("File closed and handle freed successfully.\n");
-    
+    printf("Files closed and handles freed successfully.\n");
+
     return EXIT_SUCCESS;
 }
