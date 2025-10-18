@@ -9,6 +9,7 @@ add_library(ticksio STATIC
     src/csv.c
     src/helpers.c
     src/chunks.c
+    src/index.c
 )
 
 target_include_directories(ticksio PUBLIC include)

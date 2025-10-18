@@ -174,6 +174,24 @@ int append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chu
     handle->index.entries[handle->index.num_entries] = new_index_entry;
     handle->index.num_entries++;
 
+    // Get the current file position to update index_offset
+    long current_pos_long = ftell(handle->file_stream);
+    if (current_pos_long == -1L) {
+        perror("ERROR: ftell failed after writing chunk data");
+        return EXIT_FAILURE;
+    }
+    handle->index_offset = (uint64_t)current_pos_long;
+
+    // Write new index_offset
+    if (_fseeki64(handle->file_stream, 4 + sizeof(ticks_header_t), SEEK_SET) != 0) {
+        perror("ERROR: _fseeki64 before index_offset update failed");
+        return EXIT_FAILURE;
+    }
+    if (fwrite(&handle->index_offset, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t)) {
+        perror("ERROR: fwrite (index_offset update)");
+        return EXIT_FAILURE;
+    }
+
     return EXIT_SUCCESS;
 }
 

@@ -29,7 +29,7 @@ int main() {
     }
 
     printf("File created successfully: %s\n", test_filename);
-    
+        
     printf("\n--- Reading CSV ---\n");
     
     csv_read_result_t reader;
@@ -48,6 +48,12 @@ int main() {
     }
     
     csv_reader_cleanup(&reader);
+
+    if (ticks_close(create_handle) != EXIT_SUCCESS) {
+        print_error("ticks_close (create)");
+        return EXIT_FAILURE;
+    }
+    printf("Data added and file closed successfully.\n");
 
     printf("\n--- Opening File ---\n");
     ticks_file_t* read_handle = ticks_open(test_filename);
