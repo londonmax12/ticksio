@@ -35,26 +35,28 @@ static void write_data(uint8_t** buffer, uint64_t value, size_e size) {
     }
 }
 
+typedef struct {
+    ticks_chunk_t* chunk;
+    ticks_status_e status;
+} create_chunk_result;
 
-ticks_chunk_t* create_chunk(uint64_t* const row_index, const trade_data_t* entries, uint64_t num_entries) {
+static create_chunk_result create_chunk(uint64_t* const row_index, const trade_data_t* entries, uint64_t num_entries) {
     if (*row_index >= num_entries) {
         perror("ERROR: row_index out of bounds in create_chunk\n");
-        return NULL;
+        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_INVALID_ARGUMENTS};
     }
 
     ticks_chunk_t* chunk = malloc(sizeof(ticks_chunk_t));
     if (chunk == NULL) {
         perror("ERROR: Unable to allocate memory for chunk structure\n");
-        errno = ENOMEM;
-        return NULL;
+        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
     }
 
     chunk->data = malloc(MAX_CHUNK_SIZE);
     if (chunk->data == NULL) {
         free(chunk);
         perror("ERROR: Unable to allocate memory for chunk data\n");
-        errno = ENOMEM;
-        return NULL;
+        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
     }
 
     // Pass 1: "Dry run" to determine the final data types and number of records for the chunk.
@@ -101,7 +103,7 @@ ticks_chunk_t* create_chunk(uint64_t* const row_index, const trade_data_t* entri
         free(chunk->data);
         free(chunk);
         perror("ERROR: Unable to fit any records into chunk due to size constraints\n");
-        return NULL;
+        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_EMPTY_CHUNK};
     }
 
     // Serialize the records using the determined optimal sizes.
@@ -116,34 +118,33 @@ ticks_chunk_t* create_chunk(uint64_t* const row_index, const trade_data_t* entri
     chunk->data_size = data_ptr - chunk->data;
     *row_index = start_row_index + chunk->num_records; // Advance the main index
 
-    return chunk;
+    return (create_chunk_result){.chunk = chunk, .status = TICKS_OK};
 }
 
 // Appends a chunk's data to the file and adds its metadata to the in-memory index.
-int append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chunk) {
+ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chunk) {
     if (handle == NULL || chunk == NULL || handle->file_stream == NULL || chunk->data_size == 0) {
-        errno = EINVAL;
         perror("ERROR: Invalid arguments to append_chunk_and_update_index\n");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
-    // Flushing the stream serves as a robust check. If the underlying file descriptor is invalid, fflush will fail and set errno appropriately.
+    // Flushing the stream serves as a robust check. If the underlying file descriptor is invalid, fflush will fail and return an error.
     // This helps confirm that the file stream has been closed externally.
     if (fflush(handle->file_stream) != 0) {
         perror("ERROR: fflush failed before writing chunk data. The file stream is likely closed");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
 
     const uint64_t chunk_write_pos = handle->index_offset;
 
     if (_fseeki64(handle->file_stream, chunk_write_pos, SEEK_SET) != 0) {
         perror("ERROR: _fseeki64 before chunk write failed");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
 
     if (fwrite(chunk->data, 1, chunk->data_size, handle->file_stream) != chunk->data_size) {
         perror("FATAL ERROR on fwrite (chunk data)");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
     
     handle->index_offset = chunk_write_pos + chunk->data_size;
@@ -166,8 +167,7 @@ int append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chu
     if (new_entries == NULL) {
         // If realloc fails, the original handle->index.entries pointer is still valid.
         perror("ERROR: Unable to allocate memory for index entries\n");
-        errno = ENOMEM;
-        return EXIT_FAILURE;
+        return TICKS_ERROR_MEMORY_ALLOCATION;
     }
     handle->index.entries = new_entries;
 
@@ -179,48 +179,54 @@ int append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chu
     long current_pos_long = ftell(handle->file_stream);
     if (current_pos_long == -1L) {
         perror("ERROR: ftell failed after writing chunk data");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
     handle->index_offset = (uint64_t)current_pos_long;
 
     // Write new index_offset
     if (_fseeki64(handle->file_stream, 4 + sizeof(ticks_header_t), SEEK_SET) != 0) {
         perror("ERROR: _fseeki64 before index_offset update failed");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
     if (fwrite(&handle->index_offset, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t)) {
         perror("ERROR: fwrite (index_offset update)");
-        return EXIT_FAILURE;
+        return TICKS_ERROR_FILE_IO;
     }
 
-    return EXIT_SUCCESS;
+    return TICKS_OK;
 }
 
 
-int create_chunks(ticks_file_t* handle, const trade_data_t* entries, uint64_t num_entries)
+ticks_status_e create_chunks(ticks_file_t* handle, const trade_data_t* entries, uint64_t num_entries)
 {
     uint64_t row_index = 0;
 
     while (row_index < num_entries) {
-        ticks_chunk_t* chunk = create_chunk(&row_index, entries, num_entries);
-        if (chunk == NULL) {
-            if (errno == ENOMEM) {
-                return EXIT_FAILURE;
+        create_chunk_result result = create_chunk(&row_index, entries, num_entries);
+        ticks_chunk_t* chunk = result.chunk;
+        if (chunk == NULL || result.status != TICKS_OK) {
+            if (result.status == TICKS_ERROR_EMPTY_CHUNK) {
+                continue;
+            } 
+            else if (result.status != TICKS_OK) {
+                perror("ERROR: create_chunk failed\n");
+                return result.status;
             }
             continue;
         }
 
-        if (append_chunk_and_update_index(handle, chunk) != EXIT_SUCCESS) {
+        ticks_status_e append_chunk_result = append_chunk_and_update_index(handle, chunk);
+        if (append_chunk_result != TICKS_OK) {
             free(chunk->data);
             free(chunk);
             perror("ERROR: append_chunk_and_update_index failed\n");
-            return EXIT_FAILURE;
+            return append_chunk_result;
         }
         
         free(chunk->data);
         free(chunk);
     }
 
-    return EXIT_SUCCESS;
+    return TICKS_OK;
 }
 

@@ -17,7 +17,7 @@ enum file_mode_e {
     FILE_MODE_WRITE
 };
 
-// --- INTERNAL STRUCTURE DEFINITION ---
+// --- Internal handle structure definition ---
 struct ticks_file_t_internal {
     FILE *file_stream;  // The hidden file pointer
     ticks_header_t header; // The hidden file header

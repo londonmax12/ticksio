@@ -3,7 +3,7 @@
 #include "ticksio/constants.h"
 
 // Helper function to convert timestamp string to milliseconds since epoch
-uint64_t timestamp_to_ms(const char *timestamp_str) {
+static uint64_t timestamp_to_ms(const char *timestamp_str) {
     struct tm tm_time;
     memset(&tm_time, 0, sizeof(struct tm));
     int year, month, day, hour, min, sec, ms = 0;
@@ -38,17 +38,17 @@ uint64_t timestamp_to_ms(const char *timestamp_str) {
 }
 
 // Helper function to skip the CSV header line
-csv_read_status_t skip_header(FILE *fp) {
-    if (!fp) return CSV_READ_INVALID_ARGS;
+static ticks_status_e skip_header(FILE *fp) {
+    if (!fp) return TICKS_ERROR_INVALID_ARGUMENTS;
     
     char line[CSV_MAX_LINE_LEN];
     if (fgets(line, sizeof(line), fp) == NULL) {
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_FILE_IO;
     }
-    return CSV_READ_SUCCESS;
+    return TICKS_OK;
 }
 
-uint64_t count_csv_records(FILE *fp)
+static uint64_t count_csv_records(FILE *fp)
 {
     if (!fp) return 0;
 
@@ -72,7 +72,7 @@ uint64_t count_csv_records(FILE *fp)
     return count;
 }
 
-int read_csv_chunk(FILE *fp, trade_data_t *buffer, int max_records)
+static int read_csv_chunk(FILE *fp, trade_data_t *buffer, int max_records)
 {
     if (!fp || !buffer || max_records <= 0) {
         return -1;
@@ -111,14 +111,14 @@ int read_csv_chunk(FILE *fp, trade_data_t *buffer, int max_records)
     return records_read;
 }
 
-csv_read_status_t attempt_full_load(csv_read_result_t *result, const char *filename)
+static ticks_status_e attempt_full_load(csv_read_result_t *result, const char *filename)
 {
      printf("Attempting full file load...\n");
     
     FILE* fp = fopen(filename, "r");
     if (!fp) {
         perror("Error opening file");
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_FILE_IO;
     }
 
     // Count total records
@@ -126,7 +126,7 @@ csv_read_status_t attempt_full_load(csv_read_result_t *result, const char *filen
     if (result->total_records == 0) {
         fclose(fp);
         fprintf(stderr, "File contains no data records\n");
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_INVALID_FORMAT;
     }
 
     // Calculate memory requirement
@@ -140,7 +140,7 @@ csv_read_status_t attempt_full_load(csv_read_result_t *result, const char *filen
     if (!result->buffer) {
         fclose(fp);
         fprintf(stderr, "Full load failed: Cannot allocate %.2f MB. Falling back to chunked loading.\n", memory_mb);
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_MEMORY_ALLOCATION;
     }
 
     // Read all data at once
@@ -161,28 +161,28 @@ csv_read_status_t attempt_full_load(csv_read_result_t *result, const char *filen
     result->current_chunk = 1;
     
     printf("Full load successful! Loaded %llu records.\n", result->records_in_buffer);
-    return CSV_READ_SUCCESS;
+    return TICKS_OK;
 }
 
-csv_read_status_t csv_reader_init(csv_read_result_t *result, const char *filename)
+static ticks_status_e csv_reader_init(csv_read_result_t *result, const char *filename)
 {
     if (!result || !filename) {
-        return CSV_READ_INVALID_ARGS;
+        return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
     memset(result, 0, sizeof(csv_read_result_t));
     
     // First attempt full load for maximum performance
-    if (attempt_full_load(result, filename) == CSV_READ_SUCCESS) {
-        return CSV_READ_SUCCESS;
+    if (attempt_full_load(result, filename) == TICKS_OK) {
+        return TICKS_OK;
     }
     
     // Fall back to chunked loading
     printf("Falling back to chunked loading...\n");
     result->file_handle = fopen(filename, "r");
     if (!result->file_handle) {
-        perror("Error opening file");
-        return CSV_READ_ERROR;
+        perror("Error: Failed to open file");
+        return TICKS_ERROR_FILE_IO;
     }
 
     // Count total records for progress reporting
@@ -190,7 +190,7 @@ csv_read_status_t csv_reader_init(csv_read_result_t *result, const char *filenam
     if (result->total_records == 0) {
         fclose(result->file_handle);
         result->file_handle = NULL;
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_INVALID_FORMAT;
     }
 
     printf("File contains %llu records, loading in chunks...\n", result->total_records);
@@ -199,23 +199,23 @@ csv_read_status_t csv_reader_init(csv_read_result_t *result, const char *filenam
     fseek(result->file_handle, 0, SEEK_SET);
     skip_header(result->file_handle);
 
-    return CSV_READ_SUCCESS;
+    return TICKS_OK;
 }
 
-csv_read_status_t csv_read_next_chunk(csv_read_result_t *result, size_t chunk_size)
+static ticks_status_e csv_read_next_chunk(csv_read_result_t *result, size_t chunk_size)
 {
     if (!result) {
-        return CSV_READ_INVALID_ARGS;
+        return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
     // If we did a full load, we're already done
     if (result->is_full_load) {
-        return result->is_completed ? CSV_READ_EOF : CSV_READ_SUCCESS;
+        return result->is_completed ? TICKS_EOF : TICKS_OK;
     }
 
     // Chunked loading logic
     if (!result->file_handle || result->is_completed) {
-        return CSV_READ_EOF;
+        return TICKS_EOF;
     }
 
     // Free previous buffer if it exists
@@ -228,7 +228,7 @@ csv_read_status_t csv_read_next_chunk(csv_read_result_t *result, size_t chunk_si
     result->buffer = (trade_data_t*)malloc(chunk_size * sizeof(trade_data_t));
     if (!result->buffer) {
         fprintf(stderr, "Failed to allocate memory for chunk\n");
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_MEMORY_ALLOCATION;
     }
 
     // Read chunk
@@ -236,7 +236,7 @@ csv_read_status_t csv_read_next_chunk(csv_read_result_t *result, size_t chunk_si
     if (records_read < 0) {
         free(result->buffer);
         result->buffer = NULL;
-        return CSV_READ_ERROR;
+        return TICKS_ERROR_FILE_IO;
     }
 
     result->records_in_buffer = records_read;
@@ -252,16 +252,16 @@ csv_read_status_t csv_read_next_chunk(csv_read_result_t *result, size_t chunk_si
         result->is_completed = 1;
         fclose(result->file_handle);
         result->file_handle = NULL;
-        return CSV_READ_EOF;
+        return TICKS_EOF;
     }
 
-    return CSV_READ_SUCCESS;
+    return TICKS_OK;
 }
 
-csv_read_status_t read_csv(const char *filename, csv_read_result_t *result)
+ticks_status_e read_csv(const char *filename, csv_read_result_t *result)
 {
     if (!result) {
-        return CSV_READ_INVALID_ARGS;
+        return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
     // First call - initialize
@@ -276,10 +276,10 @@ csv_read_status_t read_csv(const char *filename, csv_read_result_t *result)
     }
 
     // If we did a full load, first call returns all data, subsequent calls return EOF
-    return result->is_full_load && result->current_chunk == 0 ? CSV_READ_SUCCESS : CSV_READ_EOF;
+    return result->is_full_load && result->current_chunk == 0 ? TICKS_OK: TICKS_EOF;
 }
 
-void csv_reader_cleanup(csv_read_result_t *result)
+void csv_reader_cleanup(csv_read_result_t* result)
 {
     if (!result) return;
 

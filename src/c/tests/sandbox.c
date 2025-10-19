@@ -6,8 +6,9 @@
 #include <string.h>
 #include <errno.h>
 
-static void print_error(const char *func_name) {
-    fprintf(stderr, "ERROR in %s: %s\n", func_name, strerror(errno));
+static void print_error(const char* func_name, ticks_status_e status) {
+    const char* status_str = ticks_status_to_string(status);
+    fprintf(stderr, "ERROR in %s: %s\n", func_name, status_str);
 }
 
 int main() {
@@ -15,21 +16,22 @@ int main() {
 
     printf("--- Creating File ---\n");
 
-    ticks_header_t* my_header = malloc(sizeof(ticks_header_t));
+    ticks_header_t* new_header = malloc(sizeof(ticks_header_t));
+    memset(new_header, 0, sizeof(ticks_header_t));
 
-    memset(my_header, 0, sizeof(ticks_header_t));
-    strcpy(my_header->ticker, "AAPL");
-    strcpy(my_header->currency, "USD");
-    strcpy(my_header->country, "US");
-    my_header->asset_class = 10;
-    my_header->compression_type = 0;
+    strcpy(new_header->ticker, "AAPL");
+    strcpy(new_header->currency, "USD");
+    strcpy(new_header->country, "US");
+    new_header->asset_class = 10;
+    new_header->compression_type = 0;
 
-    ticks_file_t* create_handle = ticks_new_file(test_filename, my_header);
+    ticks_file_t* create_handle = NULL;
+    ticks_status_e create_open_status = ticks_new_file(test_filename, new_header, &create_handle);
 
-    free(my_header);
+    free(new_header);
 
     if (create_handle == NULL || create_handle->file_stream == NULL) {
-        print_error("ticks_create");
+        print_error("ticks_create", create_open_status);
         return EXIT_FAILURE;
     }
 
@@ -40,10 +42,12 @@ int main() {
     csv_read_result_t reader;
     memset(&reader, 0, sizeof(reader));
     
-    while (read_csv("random_tick_data.csv", &reader) == CSV_READ_SUCCESS) {
+    ticks_status_e read_status;
+    while ((read_status = read_csv("random_tick_datass.csv", &reader)) == TICKS_OK) {
         printf("Adding %llu records to ticks file...\n", reader.records_in_buffer);
-        if (ticks_add_data(create_handle, reader.buffer, reader.records_in_buffer) != EXIT_SUCCESS) {
-            print_error("ticks_add_data");
+        ticks_status_e add_data_result = ticks_add_data(create_handle, reader.buffer, reader.records_in_buffer);
+        if (add_data_result != TICKS_OK) {
+            print_error("ticks_add_data", add_data_result);
             csv_reader_cleanup(&reader);
             ticks_close(create_handle);
             return EXIT_FAILURE;
@@ -54,17 +58,25 @@ int main() {
     
     csv_reader_cleanup(&reader);
 
-    if (ticks_close(create_handle) != EXIT_SUCCESS) {
-        print_error("ticks_close (create)");
+    if (read_status != TICKS_EOF) {
+        print_error("read_csv", read_status);
+        ticks_close(create_handle);
         return EXIT_FAILURE;
+    }
+
+    ticks_status_e create_close_status = ticks_close(create_handle);
+    if (create_close_status != TICKS_OK) {
+        print_error("ticks_close (create)", create_close_status);
+        return TICKS_OK;
     }
     printf("Data added and file closed successfully.\n");
 
     printf("\n--- Opening File ---\n");
-    ticks_file_t* read_handle = ticks_open_read(test_filename);
+    ticks_file_t* read_handle = NULL;
+    ticks_status_e open_status = ticks_open_read(test_filename, &read_handle);
 
-    if (read_handle == NULL) {
-        print_error("ticks_open");
+    if (read_handle == NULL || open_status != TICKS_OK) {
+        print_error("ticks_open", open_status);
         return EXIT_FAILURE;
     }
 
@@ -73,32 +85,35 @@ int main() {
     printf("\n--- Retrieving Read File Metadata ---\n");
     ticks_header_t ticks_header;
 
-    if (ticks_get_header(read_handle, &ticks_header) == 0) {
-        printf("= Header Information =\n");
+    ticks_status_e get_header_status = ticks_get_header(read_handle, &ticks_header);
+    if (get_header_status == TICKS_OK) {
+        printf("Header Information\n");
         printf("├── Asset Class: %hu\n", ticks_header.asset_class);
         printf("├── Ticker: %s\n", ticks_header.ticker);
         printf("├── Currency: %s\n", ticks_header.currency);
         printf("├── Country: %s\n", ticks_header.country);
         printf("└── Compression Type: %hu\n", ticks_header.compression_type);
     } else {
-        print_error("ticks_get_asset_class");
+        print_error("ticks_get_asset_class", get_header_status);
     }
 
-    printf("= Index =\n");
+    printf("\nIndex Information\n");
     uint64_t index_offset, index_size;
-    if (ticks_get_index_offset(read_handle, &index_offset) == 0) {
+    ticks_status_e get_index_offset_status = ticks_get_index_offset(read_handle, &index_offset);
+    if (index_offset == 0 || get_index_offset_status != TICKS_OK)
         printf("├── Index Offset: %llu\n", (unsigned long long)index_offset);
-    } else {
-        print_error("ticks_get_index_offset");
-    }
-    if (ticks_get_index_size(read_handle, &index_size) == 0) {
+    else
+        print_error("ticks_get_index_offset", get_index_offset_status);
+
+    ticks_status_e get_index_size_status = ticks_get_index_size(read_handle, &index_size);
+    if  (get_index_size_status == TICKS_OK)
         if (index_size == 0)
             printf("└── Index Size: %llu\n", (unsigned long long)index_size);
         else
             printf("├── Index Size: %llu (%llu Entries)\n", (unsigned long long)index_size , (unsigned long long)(index_size / sizeof(ticks_index_entry_t)));
-    } else {
-        print_error("ticks_get_index_size");
-    }
+    else
+        print_error("ticks_get_index_size", get_index_size_status);
+
     if (index_size > 0 && read_handle->index.entries != NULL) {
         printf("└── First Index Entry:\n");
         printf("    ├── Time Base: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_time_base);
@@ -109,8 +124,9 @@ int main() {
         printf("    └── Volume Size: %u\n", read_handle->index.entries[0].volume_size);
     }
 
-    if (ticks_close(read_handle) != 0) {
-        print_error("ticks_close (read)");
+    ticks_status_e read_close_status = ticks_close(read_handle);
+    if (read_close_status != TICKS_OK) {
+        print_error("ticks_close (read)", TICKS_OK);
         return EXIT_FAILURE;
     }
 
