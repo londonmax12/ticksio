@@ -1,6 +1,6 @@
 # File Type Specification — `.ticks`
 - **Version:** `1.0`
-- **Author:** London Ball
+- **Author:** London Ball (@londonmax12 on Github)
 - **Last Updated:** 2025-10-05
 
 ---

@@ -1,6 +1,10 @@
 #ifndef TICKSIO_CHUNKS_H
 #define TICKSIO_CHUNKS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "ticksio/types.h"
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/constants.h"

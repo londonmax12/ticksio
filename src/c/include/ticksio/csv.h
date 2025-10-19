@@ -1,16 +1,16 @@
 #ifndef TICKSIO_CSV_H
 #define TICKSIO_CSV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "ticksio/types.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#define MAX_TIMESTAMP_LEN 30
-#define MAX_LINE_LEN 1024
-#define DEFAULT_CHUNK_SIZE 10000
 
 typedef struct {
     trade_data_t* buffer;
@@ -59,7 +59,7 @@ csv_read_status_t csv_read_next_chunk(csv_read_result_t* result, size_t chunk_si
  * @brief Single function that handles both full and chunked loading automatically
  * @return CSV_READ_SUCCESS if more data available, CSV_READ_EOF if done, CSV_READ_ERROR on failure
 */
-csv_read_status_t read_csv(const char* filename, csv_read_result_t* result, size_t chunk_size);
+csv_read_status_t read_csv(const char* filename, csv_read_result_t* result);
 
 /**
  * @brief Cleans up CSV reader resources

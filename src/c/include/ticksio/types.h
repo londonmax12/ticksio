@@ -1,6 +1,10 @@
 #ifndef TICKS_TYPES_H
 #define TICKS_TYPES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include "constants.h"
 
@@ -29,6 +33,13 @@ enum {
     ASSET_CLASS_CRYPTO = 5
 };
 
+typedef uint8_t endian_e;
+enum {
+    ENDIAN_UNDEFINED = 0,
+    ENDIAN_LITTLE = 1,
+    ENDIAN_BIG = 2
+};
+
 // Public header
 typedef struct {
     char ticker[TICKS_TICKER_SIZE];
@@ -36,6 +47,7 @@ typedef struct {
     asset_class_e asset_class;
     char country[TICKS_COUNTRY_SIZE];
     compression_type_e compression_type;
+    endian_e endianness;
 } ticks_header_t;
 
 // Sizes

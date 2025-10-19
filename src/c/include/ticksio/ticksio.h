@@ -1,27 +1,35 @@
 #ifndef TICKSIO_H
 #define TICKSIO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #include "ticksio/constants.h"
 #include "ticksio/types.h"
 
-// --- API (Using the Opaque Handle) ---
-
+// --- API (Uses opaque pointer for file handle) ---
+/**
+ * @brief Opens an existing ticks file in read mode, validates the magic, and returns the handle.
+ * @param filename The name of the file to open.
+ * @return A handle pointer on success, NULL on failure (and sets errno).
+ */
+ticks_file_t* ticks_open_read(const char* filename);
+/**
+ * @brief Opens an existing ticks file in write mode, validates the magic, and returns the handle.
+ * @param filename The name of the file to open.
+ * @return A handle pointer on success, NULL on failure (and sets errno).
+ */
+ticks_file_t* ticks_open_write(const char* filename);
 /**
  * @brief Creates a new ticks file, writes the header, and returns the handle.
  * @param filename The name of the file to create.
  * @param header The header structure containing initial settings.
  * @return A handle pointer on success, NULL on failure (and sets errno).
  */
-ticks_file_t* ticks_create(const char* filename, const ticks_header_t* header);
-
-/**
- * @brief Opens an existing ticks file, validates the magic, and returns the handle.
- * @param filename The name of the file to open.
- * @return A handle pointer on success, NULL on failure (and sets errno).
- */
-ticks_file_t* ticks_open(const char* filename);
+ticks_file_t* ticks_new_file(const char* filename, ticks_header_t* header);
 
 /**
  * @brief Closes the file stream and frees the opaque handle's memory.

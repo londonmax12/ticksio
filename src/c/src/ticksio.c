@@ -76,15 +76,23 @@ static int read_index_table(FILE *file, struct ticks_file_t_internal* handle) {
 }
 
 // --- API Implementation ---
-
-ticks_file_t* ticks_create(const char* filename, const ticks_header_t* header) {
+ticks_file_t* ticks_new_file(const char* filename, ticks_header_t* header) {
     if (filename == NULL || header == NULL) {
         errno = EINVAL; 
         return NULL;
     }
-
-    // Allocate memory for the internal handle structure
+    
+    if (header->endianness == ENDIAN_UNDEFINED) {
+        if (is_little_endian()) {
+            header->endianness = ENDIAN_LITTLE;
+        } else {
+            header->endianness = ENDIAN_BIG;
+        }
+    }
+    // Allocate memory for the internal handle structure and zero memory
     struct ticks_file_t_internal* handle = malloc(sizeof(struct ticks_file_t_internal));
+    memset(handle, 0, sizeof(struct ticks_file_t_internal));
+    
     if (handle == NULL) {
         printf("Failed to allocate memory: %s\n", strerror(errno));
         return NULL; // errno is set by malloc
@@ -114,11 +122,12 @@ ticks_file_t* ticks_create(const char* filename, const ticks_header_t* header) {
         return NULL;
     }
  
-    // The handle still holds the metadata, but the file stream is closed.
+    handle->mode = FILE_MODE_WRITE;
+
     return (ticks_file_t*)handle;
 }
 
-ticks_file_t* ticks_open(const char *filename) {
+ticks_file_t* ticks_open(const char* filename, const char* mode) {
     if (filename == NULL) {
         errno = EINVAL;
         return NULL;
@@ -130,8 +139,8 @@ ticks_file_t* ticks_open(const char *filename) {
         return NULL;
     }
 
-    // Open the file for reading (binary mode)
-    handle->file_stream = fopen(filename, "rb");
+    // Open the file in specified mode
+    handle->file_stream = fopen(filename, mode);
     if (handle->file_stream == NULL) {
         free(handle);
         return NULL;
@@ -179,6 +188,18 @@ ticks_file_t* ticks_open(const char *filename) {
     return (ticks_file_t*)handle;
 }
 
+ticks_file_t* ticks_open_read(const char* filename) {
+    ticks_file_t* handle = ticks_open(filename, "rb");
+    handle->mode = FILE_MODE_READ;
+    return handle;
+}
+
+ticks_file_t* ticks_open_write(const char* filename) {
+    ticks_file_t* handle = ticks_open(filename, "rb+");
+    handle->mode = FILE_MODE_READ;
+    return handle;
+}
+
 int ticks_close(ticks_file_t *handle) {
     if (handle == NULL) {
         errno = EINVAL;
@@ -205,7 +226,7 @@ int ticks_close(ticks_file_t *handle) {
     return EXIT_SUCCESS;
 }
 
-int ticks_get_header(ticks_file_t *handle, ticks_header_t *out_asset_class) {
+int ticks_get_header(ticks_file_t* handle, ticks_header_t* out_asset_class) {
     if (handle == NULL || out_asset_class == NULL) {
         errno = EINVAL;
         return EXIT_FAILURE;

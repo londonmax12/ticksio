@@ -12,3 +12,10 @@ size_e determine_min_size_uint64(uint64_t value)
         return SIZE_64BIT; // 8 bytes
     }
 }
+
+int is_little_endian() {
+    int x = 1;
+    char* y = (char*)&x;
+    *y += 48;
+    return *y == "1";
+}

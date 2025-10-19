@@ -1,5 +1,7 @@
 #include "ticksio/csv.h"
 
+#include "ticksio/constants.h"
+
 // Helper function to convert timestamp string to milliseconds since epoch
 uint64_t timestamp_to_ms(const char *timestamp_str) {
     struct tm tm_time;
@@ -39,7 +41,7 @@ uint64_t timestamp_to_ms(const char *timestamp_str) {
 csv_read_status_t skip_header(FILE *fp) {
     if (!fp) return CSV_READ_INVALID_ARGS;
     
-    char line[MAX_LINE_LEN];
+    char line[CSV_MAX_LINE_LEN];
     if (fgets(line, sizeof(line), fp) == NULL) {
         return CSV_READ_ERROR;
     }
@@ -56,7 +58,7 @@ uint64_t count_csv_records(FILE *fp)
     skip_header(fp); // Skip header
 
     uint64_t count = 0;
-    char buffer[MAX_LINE_LEN];
+    char buffer[CSV_MAX_LINE_LEN];
     
     while (fgets(buffer, sizeof(buffer), fp) != NULL) {
         // Basic validation
@@ -76,8 +78,8 @@ int read_csv_chunk(FILE *fp, trade_data_t *buffer, int max_records)
         return -1;
     }
 
-    char line[MAX_LINE_LEN];
-    char temp_timestamp[MAX_TIMESTAMP_LEN];
+    char line[CSV_MAX_LINE_LEN];
+    char temp_timestamp[CSV_MAX_TIMESTAMP_LEN];
     int records_read = 0;
 
     while (records_read < max_records && fgets(line, sizeof(line), fp)) {
@@ -149,8 +151,7 @@ csv_read_status_t attempt_full_load(csv_read_result_t *result, const char *filen
     fclose(fp);
 
     if (records_read != (int)result->total_records) {
-        fprintf(stderr, "Warning: Expected %llu records but read %d\n", 
-                result->total_records, records_read);
+        fprintf(stderr, "Warning: Expected %llu records but read %d\n", result->total_records, records_read);
         result->total_records = records_read;
     }
 
@@ -257,7 +258,7 @@ csv_read_status_t csv_read_next_chunk(csv_read_result_t *result, size_t chunk_si
     return CSV_READ_SUCCESS;
 }
 
-csv_read_status_t read_csv(const char *filename, csv_read_result_t *result, size_t chunk_size)
+csv_read_status_t read_csv(const char *filename, csv_read_result_t *result)
 {
     if (!result) {
         return CSV_READ_INVALID_ARGS;
@@ -269,8 +270,9 @@ csv_read_status_t read_csv(const char *filename, csv_read_result_t *result, size
     }
 
     // Subsequent calls - read next chunk if in chunked mode
+    // TODO: Dynamically adjust chunk size based on available memory for better performance
     if (!result->is_full_load && !result->is_completed) {
-        return csv_read_next_chunk(result, chunk_size);
+        return csv_read_next_chunk(result, MAX_CHUNK_SIZE);
     }
 
     // If we did a full load, first call returns all data, subsequent calls return EOF
