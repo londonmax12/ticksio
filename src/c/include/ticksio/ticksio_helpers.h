@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 
 size_e determine_min_size_uint64(uint64_t value);
 int is_little_endian();

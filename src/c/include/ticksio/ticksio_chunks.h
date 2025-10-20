@@ -5,10 +5,10 @@
 extern "C" {
 #endif
 
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 #include "ticksio/ticksio_internal.h"
-#include "ticksio/constants.h"
-#include "ticksio/helpers.h"
+#include "ticksio/ticksio_constants.h"
+#include "ticksio/ticksio_helpers.h"
 
 /*
 * @brief Add trade data as chunks in file

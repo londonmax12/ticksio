@@ -1,9 +1,10 @@
-#include "ticksio/chunks.h"
+#include "ticksio/ticksio_chunks.h"
 
-#include <string.h> // For memcpy
-#include "ticksio/types.h"
+#include <string.h>
+
+#include "ticksio/ticksio_types.h"
 #include "ticksio/ticksio_internal.h"
-#include "ticksio/constants.h"
+#include "ticksio/ticksio_constants.h"
 
 // Helper function to write data of a specific size to a buffer
 static void write_data(uint8_t** buffer, uint64_t value, size_e size) {

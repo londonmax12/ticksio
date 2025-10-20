@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
-#include "constants.h"
+#include "ticksio_constants.h"
 
 // --- Misc types ---
 typedef struct {
@@ -94,5 +94,7 @@ typedef enum {
 
 // Opaque ticks file handle type
 typedef struct ticks_file_t_internal ticks_file_t;
+// Opaque ticks file iterator type
+typedef struct ticks_iterator_t_internal ticks_iterator_t;
 
 #endif // TICKS_TYPES_H

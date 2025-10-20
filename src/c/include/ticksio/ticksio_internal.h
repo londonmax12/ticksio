@@ -9,8 +9,9 @@ extern "C" {
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <time.h>
 
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 
 enum file_mode_e {
     FILE_MODE_READ,
@@ -29,4 +30,11 @@ struct ticks_file_t_internal {
     enum file_mode_e mode;    // File mode (read or write)
 };
 
+struct ticks_iterator_t_internal {
+    ticks_file_t* file_handle;
+    time_t from;
+    time_t to;
+    uint32_t current_chunk;
+    uint32_t current_record_in_chunk;
+};
 #endif // TICKSIO_INTERNAL_H

@@ -7,7 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 
 // --- API (Uses opaque pointer for file handle) ---
 /**
@@ -78,6 +78,23 @@ ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t
  * @return A string representation of the status code.
  */
 const char* ticks_status_to_string(ticks_status_e status);
+
+/*
+* @brief Creates an iterator for traversing records within a specified time range
+* @param handle Pointer to the ticks file handle
+* @param from Start time (inclusive)
+* @param to End time (exclusive)
+* @param out_iterator Pointer to store the resulting iterator
+* @return Status code indicating success or failure (0 = OK)
+*/
+ticks_status_e ticks_iterator_create(ticks_file_t* handle, time_t from, time_t to, ticks_iterator_t** out_iterator);
+
+/*
+* @brief Destroys the iterator and frees associated resources
+* @param iterator Pointer to the iterator to destroy
+* @return Status code indicating success or failure (0 = OK)
+*/
+ticks_status_e ticks_iterator_destroy(ticks_iterator_t* iterator);
 
 // TODO: Compression
 #endif // TICKSIO_H

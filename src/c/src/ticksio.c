@@ -1,9 +1,9 @@
 #include "ticksio/ticksio.h"
 
 #include "ticksio/ticksio_internal.h"
-#include "ticksio/chunks.h"
-#include "ticksio/index.h"
-#include "ticksio.h"
+#include "ticksio/ticksio_chunks.h"
+#include "ticksio/ticksio_index.h"
+#include "ticksio/ticksio.h"
 
 // Helper function to write the magic and header
 static ticks_status_e write_initial_data(FILE *file, struct ticks_file_t_internal* handle) {
@@ -296,4 +296,40 @@ const char* ticks_status_to_string(ticks_status_e status)
         default:
             return "Unrecognized Status Code";   
     }
+}
+
+
+ticks_status_e ticks_iterator_create(ticks_file_t *handle, time_t from, time_t to, ticks_iterator_t** out_iterator)
+{
+    if (handle == NULL || out_iterator == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    time_t now = time(NULL);
+    if (from >= to || from < 0 || to <= 0 || from > now || to > now)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    ticks_iterator_t* iterator = malloc(sizeof(ticks_iterator_t));
+    if (iterator == NULL)
+        return TICKS_ERROR_MEMORY_ALLOCATION;
+    
+    memset(iterator, 0, sizeof(ticks_iterator_t));
+    iterator->file_handle = handle;
+    iterator->from = from;
+    iterator->to = to;
+    iterator->current_chunk = 0;
+    iterator->current_record_in_chunk = 0;
+
+    *out_iterator = iterator;
+
+    return TICKS_OK;
+}
+
+ticks_status_e ticks_iterator_destroy(ticks_iterator_t *iterator)
+{
+    if (iterator == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    free(iterator);
+    
+    return TICKS_OK;
 }

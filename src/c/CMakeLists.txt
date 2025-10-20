@@ -6,10 +6,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_library(ticksio STATIC
     src/ticksio.c
-    src/csv.c
-    src/helpers.c
-    src/chunks.c
-    src/index.c
+    src/ticksio_csv.c
+    src/ticksio_helpers.c
+    src/ticksio_chunks.c
+    src/ticksio_index.c
 )
 
 target_include_directories(ticksio PUBLIC include)

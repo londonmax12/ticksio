@@ -1,6 +1,7 @@
 #include "ticksio/ticksio.h"
-#include "ticksio/csv.h"
+#include "ticksio/ticksio_csv.h"
 #include "ticksio/ticksio_internal.h"
+#include "ticksio/ticksio_platform.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -43,7 +44,7 @@ int main() {
     memset(&reader, 0, sizeof(reader));
     
     ticks_status_e read_status;
-    while ((read_status = read_csv("random_tick_datass.csv", &reader)) == TICKS_OK) {
+    while ((read_status = read_csv("random_tick_data.csv", &reader)) == TICKS_OK) {
         printf("Adding %llu records to ticks file...\n", reader.records_in_buffer);
         ticks_status_e add_data_result = ticks_add_data(create_handle, reader.buffer, reader.records_in_buffer);
         if (add_data_result != TICKS_OK) {
@@ -58,7 +59,7 @@ int main() {
     
     csv_reader_cleanup(&reader);
 
-    if (read_status != TICKS_EOF) {
+    if (read_status != TICKS_EOF && read_status != TICKS_OK) {
         print_error("read_csv", read_status);
         ticks_close(create_handle);
         return EXIT_FAILURE;
@@ -67,7 +68,7 @@ int main() {
     ticks_status_e create_close_status = ticks_close(create_handle);
     if (create_close_status != TICKS_OK) {
         print_error("ticks_close (create)", create_close_status);
-        return TICKS_OK;
+        return EXIT_FAILURE;
     }
     printf("Data added and file closed successfully.\n");
 
@@ -131,6 +132,39 @@ int main() {
     }
 
     printf("Files closed and handles freed successfully.\n");
+
+    printf("\n--- Testing file iterator ---\n");
+    ticks_file_t* iter_handle = NULL;
+    ticks_status_e iter_open_status = ticks_open_read(test_filename, &iter_handle);
+    if (iter_handle == NULL || iter_open_status != TICKS_OK) {
+        print_error("ticks_open (iterator)", iter_open_status);
+        return EXIT_FAILURE;
+    }
+
+    int from_year = 2020;
+    int to_year = 2021;
+
+    struct tm from_time = {0};
+    from_time.tm_year = 2020 - 1900;
+    from_time.tm_mon = 0;
+    from_time.tm_mday = 1;
+    time_t from = timegm_portable(&from_time);
+
+    struct tm to_time = {0};
+    to_time.tm_year = 2021 - 1900;
+    to_time.tm_mon = 0;
+    to_time.tm_mday = 1;
+    time_t to = timegm_portable(&to_time);
+
+    ticks_iterator_t* iterator = NULL;
+    ticks_status_e iter_create_status = ticks_iterator_create(iter_handle, from, to, &iterator);
+
+    if (iterator == NULL || iter_create_status != TICKS_OK) {
+        print_error("ticks_iterator_create", iter_create_status);
+        ticks_close(iter_handle);
+        return EXIT_FAILURE;
+    }
+    printf("Iterator created successfully for range %d-%d\n", from_year, to_year);
 
     return EXIT_SUCCESS;
 }

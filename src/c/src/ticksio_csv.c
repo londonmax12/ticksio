@@ -1,6 +1,6 @@
-#include "ticksio/csv.h"
+#include "ticksio/ticksio_csv.h"
 
-#include "ticksio/constants.h"
+#include "ticksio/ticksio_constants.h"
 
 // Helper function to convert timestamp string to milliseconds since epoch
 static uint64_t timestamp_to_ms(const char *timestamp_str) {

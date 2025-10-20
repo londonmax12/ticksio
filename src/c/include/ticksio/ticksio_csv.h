@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 #include "ticksio/ticksio_internal.h"
-#include "ticksio/types.h"
+#include "ticksio/ticksio_types.h"
 
 /*
 * @brief Creates the index in the ticks file

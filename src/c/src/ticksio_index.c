@@ -1,4 +1,4 @@
-#include "ticksio/index.h"
+#include "ticksio/ticksio_index.h"
 
 ticks_status_e create_index(ticks_file_t* handle) {
     if (handle == NULL || handle->file_stream == NULL) {
