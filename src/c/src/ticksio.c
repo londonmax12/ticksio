@@ -3,6 +3,7 @@
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/ticksio_chunks.h"
 #include "ticksio/ticksio_index.h"
+#include "ticksio/ticksio_compress.h"
 #include "ticksio/ticksio_helpers.h"
 #include "ticksio/ticksio_schema.h"
 #include "ticksio/ticksio_constants.h"
@@ -118,14 +119,18 @@ ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, tick
     if (ticks_schema_lookup(header->schema_id) == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
+    // The compression codec must be one this build can also decode, so the file
+    // we create can always be read back.
+    if (!ticks_compression_supported(header->compression_type))
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
     // Allocate memory for the internal handle structure and zero memory
     struct ticks_file_t_internal* handle = malloc(sizeof(struct ticks_file_t_internal));
-    memset(handle, 0, sizeof(struct ticks_file_t_internal));
-
     if (handle == NULL) {
         printf("Failed to allocate memory: %s\n", strerror(errno));
         return TICKS_ERROR_MEMORY_ALLOCATION;
     }
+    memset(handle, 0, sizeof(struct ticks_file_t_internal));
 
     // Open the file for writing (binary mode)
     handle->file_stream = fopen(filename, "wb");
@@ -209,6 +214,14 @@ ticks_status_e ticks_open(const char* filename, const char* mode, ticks_file_t**
     // Deserialize the header fields and index pointers from the region buffer.
     deserialize_header(region, &handle->header, &handle->index_offset, &handle->index_size);
 
+    // Reject files whose compression codec this build cannot decode, rather than
+    // failing later mid-decode.
+    if (!ticks_compression_supported(handle->header.compression_type)) {
+        fclose(handle->file_stream);
+        free(handle);
+        return TICKS_ERROR_INVALID_FORMAT;
+    }
+
     // Read the Index Table into memory (absence of entries is not fatal).
     read_index_table(handle->file_stream, handle);
 
@@ -248,22 +261,16 @@ ticks_status_e ticks_close(ticks_file_t *handle) {
     if (handle == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
     
-    // Try to close the internal file stream if it's open
+    // Try to close the internal file stream if it's open. Whatever the result,
+    // every owned allocation (the index array and the handle itself) must still
+    // be released — a failed fclose does not exempt us from freeing them.
     int status = (handle->file_stream != NULL) ? fclose(handle->file_stream) : 0;
-    if (status != 0) {
-        // fclose failed, errno is set by fclose
-        free(handle);
-        return TICKS_ERROR_FILE_IO;
-    }
 
-    // Free index entries if allocated
-    if (handle->index.entries != NULL)
-        free(handle->index.entries);
-    
-    // Free the dynamically allocated handle structure
+    free(handle->index.entries); // free(NULL) is a no-op when none was allocated
     free(handle);
 
-    return TICKS_OK;
+    // fclose failed (errno set by fclose); report it after cleanup.
+    return (status != 0) ? TICKS_ERROR_FILE_IO : TICKS_OK;
 }
 
 ticks_status_e ticks_get_header(ticks_file_t* handle, ticks_header_t* out_asset_class) {
@@ -373,30 +380,62 @@ ticks_status_e ticks_verify(ticks_file_t* handle) {
     if (buf == NULL)
         return TICKS_ERROR_MEMORY_ALLOCATION;
 
+    // The CRC is taken over the on-disk bytes, so corruption is detected without
+    // decoding. The record-count cross-check, however, needs each chunk's
+    // num_records (offset 0 of the columnar header), which for a compressed file
+    // lives inside the frame's payload — so compressed chunks are decoded here.
+    const compression_type_e ctype = handle->header.compression_type;
+    uint8_t* decoded = NULL;       // lazy scratch for decompressing compressed chunks
+    uint32_t decoded_cap = 0;
+
     // Recompute the file-level summary as we go so it can be cross-checked
-    // against the header's denormalized copy. record_count comes from each
-    // chunk's own num_records field (offset 0 of the chunk header).
+    // against the header's denormalized copy.
     uint64_t record_count = 0;
 
     for (uint32_t i = 0; i < handle->index.num_entries; i++) {
         const ticks_index_entry_t* e = &handle->index.entries[i];
 
         if (ticks_fseek64(handle->file_stream, (int64_t)e->chunk_offset, SEEK_SET) != 0) {
-            free(buf);
+            free(buf); free(decoded);
             return TICKS_ERROR_FILE_IO;
         }
         if (fread(buf, 1, e->chunk_size, handle->file_stream) != e->chunk_size) {
-            free(buf);
+            free(buf); free(decoded);
             return TICKS_ERROR_FILE_IO;
         }
         if (ticks_crc32(buf, e->chunk_size) != e->chunk_crc32) {
-            free(buf);
+            free(buf); free(decoded);
             return TICKS_ERROR_CORRUPT_DATA;
         }
-        record_count += le_get_u32(buf + 0);
+
+        if (ctype == COMPRESSION_NONE) {
+            record_count += le_get_u32(buf + 0);
+        } else {
+            if (e->chunk_size < TICKS_COMPRESS_FRAME_HEADER_SIZE) {
+                free(buf); free(decoded);
+                return TICKS_ERROR_INVALID_FORMAT;
+            }
+            const uint32_t usize = le_get_u32(buf + 0);
+            if (usize < TICKS_CHUNK_HEADER_BASE_SIZE) {
+                free(buf); free(decoded);
+                return TICKS_ERROR_INVALID_FORMAT;
+            }
+            if (decoded == NULL || decoded_cap < usize) {
+                uint8_t* nd = realloc(decoded, usize);
+                if (nd == NULL) { free(buf); free(decoded); return TICKS_ERROR_MEMORY_ALLOCATION; }
+                decoded = nd;
+                decoded_cap = usize;
+            }
+            size_t got = 0;
+            ticks_status_e ds = ticks_decompress_chunk(ctype, buf, e->chunk_size,
+                                                       decoded, usize, &got);
+            if (ds != TICKS_OK) { free(buf); free(decoded); return ds; }
+            record_count += le_get_u32(decoded + 0);
+        }
     }
 
     free(buf);
+    free(decoded);
 
     // Cross-check the header summary against the index/chunks. min/max come from
     // the time-ordered index extremes; record_count from the summed chunk headers.
@@ -435,6 +474,8 @@ const char* ticks_status_to_string(ticks_status_e status)
             return "Corrupt Data (checksum mismatch)";
         case TICKS_ERROR_SCHEMA_MISMATCH:
             return "Schema Mismatch (operation does not match the file's record schema)";
+        case TICKS_ERROR_COMPRESSION:
+            return "Compression Error (codec failed to compress or decompress a chunk)";
         default:
             return "Unrecognized Status Code";   
     }
@@ -446,8 +487,12 @@ ticks_status_e ticks_iterator_create(ticks_file_t *handle, time_t from, time_t t
     if (handle == NULL || out_iterator == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
-    time_t now = time(NULL);
-    if (from >= to || from < 0 || to <= 0 || from > now || to > now)
+    // The range must be a well-formed, non-empty [from, to) window with
+    // non-negative bounds. The window is NOT validated against wall-clock time:
+    // a .ticks file is a historical store and a caller may legitimately ask for
+    // a window extending up to (or past) "now", and iteration must not depend on
+    // the current clock. Out-of-range windows simply yield no records.
+    if (from >= to || from < 0 || to <= 0)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
     ticks_iterator_t* iterator = malloc(sizeof(ticks_iterator_t));
@@ -481,28 +526,65 @@ static uint64_t iter_read_uint(const uint8_t* p, size_e size) {
     }
 }
 
+// Grow *buf to at least `need` bytes (amortized via realloc), tracking capacity
+// in *cap. Returns 0 on success, -1 on allocation failure (buffer left intact).
+static int iter_ensure_cap(uint8_t** buf, uint32_t* cap, uint32_t need) {
+    if (*buf != NULL && *cap >= need)
+        return 0;
+    uint8_t* nb = realloc(*buf, need);
+    if (nb == NULL)
+        return -1;
+    *buf = nb;
+    *cap = need;
+    return 0;
+}
+
 // Load chunk `i` into the iterator's buffer and reset the decode cursor to its
 // first record (cur[] = the chunk's absolute base values). Reads the column
 // count, widths and encodings straight from the self-describing chunk header,
-// so the iterator does not need the file's schema.
+// so the iterator does not need the file's schema. If the file is compressed,
+// the on-disk frame is read into comp_buf and decoded into chunk_buf first.
 static ticks_status_e iter_load_chunk(ticks_iterator_t* it, uint32_t i) {
     const ticks_index_entry_t* e = &it->file_handle->index.entries[i];
-
-    if (e->chunk_size < TICKS_CHUNK_HEADER_BASE_SIZE)
-        return TICKS_ERROR_INVALID_FORMAT;
-
-    if (it->chunk_buf == NULL || it->chunk_buf_cap < e->chunk_size) {
-        uint8_t* nb = realloc(it->chunk_buf, e->chunk_size);
-        if (nb == NULL)
-            return TICKS_ERROR_MEMORY_ALLOCATION;
-        it->chunk_buf = nb;
-        it->chunk_buf_cap = e->chunk_size;
-    }
+    const compression_type_e ctype = it->file_handle->header.compression_type;
 
     if (ticks_fseek64(it->file_handle->file_stream, (int64_t)e->chunk_offset, SEEK_SET) != 0)
         return TICKS_ERROR_FILE_IO;
-    if (fread(it->chunk_buf, 1, e->chunk_size, it->file_handle->file_stream) != e->chunk_size)
-        return TICKS_ERROR_FILE_IO;
+
+    // Bytes of the decoded columnar payload now in chunk_buf (== chunk_size when
+    // the file is uncompressed; the frame's decoded size when a codec is used).
+    uint32_t payload_size;
+
+    if (ctype == COMPRESSION_NONE) {
+        // chunk_buf holds the on-disk bytes directly.
+        if (e->chunk_size < TICKS_CHUNK_HEADER_BASE_SIZE)
+            return TICKS_ERROR_INVALID_FORMAT;
+        if (iter_ensure_cap(&it->chunk_buf, &it->chunk_buf_cap, e->chunk_size) != 0)
+            return TICKS_ERROR_MEMORY_ALLOCATION;
+        if (fread(it->chunk_buf, 1, e->chunk_size, it->file_handle->file_stream) != e->chunk_size)
+            return TICKS_ERROR_FILE_IO;
+        payload_size = e->chunk_size;
+    } else {
+        // Read the compressed frame, then decode it into chunk_buf. The frame's
+        // prefix gives the exact decoded size, so chunk_buf is sized precisely.
+        if (iter_ensure_cap(&it->comp_buf, &it->comp_buf_cap, e->chunk_size) != 0)
+            return TICKS_ERROR_MEMORY_ALLOCATION;
+        if (fread(it->comp_buf, 1, e->chunk_size, it->file_handle->file_stream) != e->chunk_size)
+            return TICKS_ERROR_FILE_IO;
+        if (e->chunk_size < TICKS_COMPRESS_FRAME_HEADER_SIZE)
+            return TICKS_ERROR_INVALID_FORMAT;
+        const uint32_t decoded_size = le_get_u32(it->comp_buf);
+        if (decoded_size < TICKS_CHUNK_HEADER_BASE_SIZE)
+            return TICKS_ERROR_INVALID_FORMAT;
+        if (iter_ensure_cap(&it->chunk_buf, &it->chunk_buf_cap, decoded_size) != 0)
+            return TICKS_ERROR_MEMORY_ALLOCATION;
+        size_t got = 0;
+        ticks_status_e ds = ticks_decompress_chunk(ctype, it->comp_buf, e->chunk_size,
+                                                   it->chunk_buf, decoded_size, &got);
+        if (ds != TICKS_OK)
+            return ds;
+        payload_size = (uint32_t)got;
+    }
 
     const uint8_t* b = it->chunk_buf;
     it->chunk_nrec = le_get_u32(b + 0);
@@ -511,7 +593,7 @@ static ticks_status_e iter_load_chunk(ticks_iterator_t* it, uint32_t i) {
         return TICKS_ERROR_INVALID_FORMAT;
 
     const uint32_t header_size = TICKS_CHUNK_HEADER_SIZE(it->chunk_ncols);
-    if (e->chunk_size < header_size)
+    if (payload_size < header_size)
         return TICKS_ERROR_INVALID_FORMAT;
 
     const uint8_t* desc = b + TICKS_CHUNK_HEADER_BASE_SIZE;
@@ -646,6 +728,7 @@ ticks_status_e ticks_iterator_destroy(ticks_iterator_t *iterator)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
     free(iterator->chunk_buf);
+    free(iterator->comp_buf);
     free(iterator);
 
     return TICKS_OK;

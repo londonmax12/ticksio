@@ -164,7 +164,8 @@ typedef enum {
     TICKS_ERROR_EMPTY_CHUNK = -7,
     TICKS_ERROR_UNSORTED_DATA = -8,
     TICKS_ERROR_CORRUPT_DATA = -9,
-    TICKS_ERROR_SCHEMA_MISMATCH = -10
+    TICKS_ERROR_SCHEMA_MISMATCH = -10,
+    TICKS_ERROR_COMPRESSION = -11
 } ticks_status_e;
 
 // Opaque ticks file handle type

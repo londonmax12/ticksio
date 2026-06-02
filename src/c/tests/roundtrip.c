@@ -257,9 +257,122 @@ static int test_quotes(void) {
     return 0;
 }
 
+// Sum the on-disk byte size of every chunk (from the index).
+static uint64_t total_chunk_bytes(ticks_file_t* r) {
+    uint64_t disk = 0;
+    for (uint32_t c = 0; c < r->index.num_entries; c++)
+        disk += r->index.entries[c].chunk_size;
+    return disk;
+}
+
+// --- Compression round-trip ----------------------------------------------
+// Writes the same trade stream twice — once uncompressed, once with ZSTD — then
+// reopens the compressed file, verifies its CRC/summary, decodes every record
+// through the public iterator (exercising the decompress path) and checks it
+// matches the input exactly, and confirms the codec actually shrank the data.
+static int test_compression(void) {
+    const uint64_t N = 2000000ULL;
+
+    trade_data_t* in = malloc(N * sizeof(trade_data_t));
+    if (!in) { fprintf(stderr, "alloc\n"); return 1; }
+
+    uint64_t ts = 1700000000000ULL;
+    int64_t price = 4000000, volume = 1000000;
+    uint32_t rng = 777u;
+    for (uint64_t i = 0; i < N; i++) {
+        rng = rng * 1103515245u + 12345u;
+        ts += (rng >> 5) % 4;
+        price += (int)((rng >> 16) % 7) - 3;
+        if (price < 1) price = 1;
+        volume += ((int)((rng >> 9) % 201)) - 100;
+        if (volume < 0) volume = 0;
+        in[i].ms_since_epoch = ts;
+        in[i].price = (uint64_t)price;
+        in[i].volume = (uint64_t)volume;
+    }
+
+    ticks_header_t hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    strcpy(hdr.ticker, "TEST"); strcpy(hdr.currency, "USD"); strcpy(hdr.country, "US");
+    hdr.asset_class = ASSET_CLASS_STOCK;
+    hdr.schema_id = SCHEMA_TRADE;
+    hdr.price_scale = -2;
+
+    // Reference: same data, no compression.
+    const char* fn_none = "roundtrip_none.ticks";
+    hdr.compression_type = COMPRESSION_NONE;
+    ticks_file_t* w = NULL;
+    if (ticks_new_file(fn_none, &hdr, &w) != TICKS_OK) { fprintf(stderr, "new_file none\n"); return 1; }
+    if (ticks_add_data(w, in, N) != TICKS_OK) { fprintf(stderr, "add none\n"); return 1; }
+    ticks_close(w);
+
+    ticks_file_t* rn = NULL;
+    if (ticks_open_read(fn_none, &rn) != TICKS_OK) { fprintf(stderr, "open none\n"); return 1; }
+    uint64_t disk_none = total_chunk_bytes(rn);
+    ticks_close(rn);
+
+    // ZSTD-compressed copy.
+    const char* fn_z = "roundtrip_zstd.ticks";
+    hdr.compression_type = COMPRESSION_ZSTD;
+    if (ticks_new_file(fn_z, &hdr, &w) != TICKS_OK) { fprintf(stderr, "new_file zstd\n"); return 1; }
+    ticks_status_e s = ticks_add_data(w, in, N);
+    if (s != TICKS_OK) { fprintf(stderr, "add zstd: %s\n", ticks_status_to_string(s)); return 1; }
+    ticks_close(w);
+
+    ticks_file_t* r = NULL;
+    if (ticks_open_read(fn_z, &r) != TICKS_OK) { fprintf(stderr, "open zstd\n"); return 1; }
+    ticks_header_t got; ticks_get_header(r, &got);
+    if (got.compression_type != COMPRESSION_ZSTD || got.record_count != N) {
+        fprintf(stderr, "FAIL: zstd header (ctype=%u rc=%llu)\n",
+                got.compression_type, (unsigned long long)got.record_count); return 1;
+    }
+    // CRC is taken over the compressed on-disk bytes, so verify must pass without
+    // decompressing.
+    if (ticks_verify(r) != TICKS_OK) { fprintf(stderr, "FAIL: zstd CRC/summary\n"); return 1; }
+
+    uint64_t disk_zstd = total_chunk_bytes(r);
+
+    // Decode every record through the public iterator and compare to the input.
+    uint64_t first_s = in[0].ms_since_epoch / 1000;
+    uint64_t last_s = in[N - 1].ms_since_epoch / 1000;
+    ticks_iterator_t* it = NULL;
+    if (ticks_iterator_create(r, (time_t)first_s, (time_t)(last_s + 1), &it) != TICKS_OK) {
+        fprintf(stderr, "FAIL: zstd iter create\n"); return 1;
+    }
+    uint64_t got_n = 0; trade_data_t rec; ticks_status_e ns;
+    while ((ns = ticks_iterator_next(it, &rec)) == TICKS_OK) {
+        const trade_data_t* want = &in[got_n];
+        if (rec.ms_since_epoch != want->ms_since_epoch || rec.price != want->price ||
+            rec.volume != want->volume) {
+            fprintf(stderr, "FAIL: zstd record %llu mismatch after decompress\n",
+                    (unsigned long long)got_n); return 1;
+        }
+        got_n++;
+    }
+    ticks_iterator_destroy(it);
+    if (ns != TICKS_EOF || got_n != N) {
+        fprintf(stderr, "FAIL: zstd iter count %llu != %llu (status %d)\n",
+                (unsigned long long)got_n, (unsigned long long)N, ns); return 1;
+    }
+
+    if (disk_zstd >= disk_none) {
+        fprintf(stderr, "FAIL: zstd %llu not smaller than uncompressed %llu\n",
+                (unsigned long long)disk_zstd, (unsigned long long)disk_none); return 1;
+    }
+
+    ticks_close(r); free(in);
+    remove(fn_none); remove(fn_z);
+    printf("PASS compress: %llu recs decoded exactly through ZSTD; CRC+summary ok; "
+           "%llu -> %llu bytes (%.2fx smaller than uncompressed columnar).\n",
+           (unsigned long long)N, (unsigned long long)disk_none,
+           (unsigned long long)disk_zstd, (double)disk_none / (double)disk_zstd);
+    return 0;
+}
+
 int main(void) {
     if (test_trades() != 0) return 1;
     if (test_quotes() != 0) return 1;
+    if (test_compression() != 0) return 1;
     printf("ALL PASS\n");
     return 0;
 }

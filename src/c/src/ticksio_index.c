@@ -8,13 +8,13 @@
 
 ticks_status_e create_index(ticks_file_t* handle) {
     if (handle == NULL || handle->file_stream == NULL) {
-        perror("ERROR: Invalid handle in create_index\n");
+        fprintf(stderr, "ERROR: Invalid handle in create_index\n");
         return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
     // Make sure index entries are allocated and initialized
     if (handle->index.entries == NULL || handle->index.num_entries == 0) {
-        perror("WARN: No index entries to write in create_index\n");
+        fprintf(stderr, "WARN: No index entries to write in create_index\n");
         return TICKS_ERROR_INVALID_FORMAT;
     }
 

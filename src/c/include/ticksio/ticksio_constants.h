@@ -10,7 +10,7 @@ extern "C" {
 // --- Header constants ---
 #define TICKS_MAGIC "TICK"
 #define TICKS_MAGIC_SIZE 4
-#define TICKS_VERSION 4
+#define TICKS_VERSION 5
 #define TICKS_TICKER_SIZE 8
 #define TICKS_CURRENCY_SIZE 3
 #define TICKS_COUNTRY_SIZE 2
@@ -99,6 +99,24 @@ extern "C" {
 
 // --- Chunking constants ---
 #define MAX_CHUNK_SIZE 16777216 // 16 MB
+
+// --- Compression constants (format v5+) ---
+// When a file's compression_type names a codec (e.g. COMPRESSION_ZSTD), each
+// chunk's self-describing columnar bytes are compressed and wrapped in a small
+// frame on disk: a fixed prefix carrying the uncompressed payload size, followed
+// by the codec's compressed payload.
+//
+//   0  4  uncompressed_size (uint32, LE)  bytes of the columnar payload once decoded
+//   4  .. compressed payload (e.g. a single zstd frame)
+//
+// The index entry's chunk_size is this framed on-disk size and chunk_crc32 is
+// taken over the framed bytes, so ticks_verify checks integrity WITHOUT
+// decompressing. A file with COMPRESSION_NONE writes chunks verbatim (no frame)
+// and is byte-identical to v4. The columnar chunk header (above) is unchanged.
+#define TICKS_COMPRESS_FRAME_HEADER_SIZE 4
+// ZSTD compression level used by the writer (1=fastest .. 19=smallest; 3 is the
+// library default and a good speed/ratio balance for delta-encoded tick data).
+#define TICKS_ZSTD_LEVEL 3
 
 // --- CSV constants ---
 #define CSV_MAX_TIMESTAMP_LEN 30

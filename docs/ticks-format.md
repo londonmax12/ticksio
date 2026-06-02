@@ -1,5 +1,5 @@
 # File Type Specification — `.ticks`
-- **Version:** `4`
+- **Version:** `5`
 - **Author:** London Ball (@londonmax12 on Github)
 - **Last Updated:** 2026-06-02
 
@@ -38,7 +38,7 @@ size of the index so a reader can locate it without scanning.
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
 | 0  | `magic_number` | char[4] | `"TICK"` (`0x54 0x49 0x43 0x4B`) |
-| 4  | `version` | uint16 | Format version (currently `4`) |
+| 4  | `version` | uint16 | Format version (currently `5`) |
 | 6  | `endianness` | uint8 | On-disk byte order: 0 = undefined, 1 = little, 2 = big (always written as `1`) |
 | 7  | `ticker` | char[8] | Instrument code (e.g., `GBPJPY` or `AAPL`) |
 | 15 | `currency` | char[3] | ISO currency code (e.g., `USD`) |
@@ -84,6 +84,11 @@ The chunk header is **generic over the column set**: it records how many columns
 the chunk has and, per column, the absolute first value, the delta width, and
 the delta encoding. A decoder therefore needs neither the index nor the schema
 registry — the chunk bytes fully describe themselves.
+
+When the file's `compression_type` names a codec, the entire self-describing
+chunk (header + columns) described in this section is the **payload** that gets
+compressed and wrapped in a per-chunk frame on disk; see §4. With
+`compression_type = 0` (none) the chunk is written exactly as described here.
 
 #### 2.2.1 Chunk header (variable length)
 A fixed 5-byte prefix, then one 10-byte descriptor per column
@@ -135,8 +140,8 @@ The index is a packed array of fixed-size entries, one per chunk, located at
 | 0  | `chunk_time_base` | uint64 | Epoch timestamp (ms) of the first tick in the chunk |
 | 8  | `chunk_last_timestamp` | uint64 | Epoch timestamp (ms) of the last tick in the chunk |
 | 16 | `chunk_offset` | uint64 | File offset where the chunk starts |
-| 24 | `chunk_size` | uint32 | Byte size of the chunk on disk (header + columns) |
-| 28 | `chunk_crc32` | uint32 | CRC32 (IEEE 802.3) of the chunk's on-disk bytes |
+| 24 | `chunk_size` | uint32 | Byte size of the chunk **as stored on disk** — the uncompressed header + columns when `compression_type = 0`, or the compression frame (§4) when a codec is set |
+| 28 | `chunk_crc32` | uint32 | CRC32 (IEEE 802.3) of the chunk's on-disk bytes (the compression frame, when compressed) |
 
 The index is a pure accelerator: per-column widths are **not** duplicated here
 (they live in the self-describing chunk header, which is authoritative), so an
@@ -180,21 +185,62 @@ the file-level summary — `record_count` from the summed chunk `num_records`, a
 `min_timestamp` / `max_timestamp` from the index extremes — and fails with a
 corruption error if it disagrees with the values stored in the header.
 
+### 3.1 Writer crash-consistency
+The writer is **not crash-atomic**. A write appends chunk bytes, then appends the
+index, then updates the header's `index_offset` / `index_size` and file-level
+summary in place; a process or power failure partway through can leave the file
+in any of several intermediate states (chunk bytes with no index entry, an index
+that does not yet cover the last chunk, or a header pointer/summary that lags the
+data). The format is **recoverable** rather than self-healing: because every
+chunk is self-describing (§2.2) and chunks are laid out contiguously from offset
+72 in non-decreasing time order, a repair tool can rebuild the index and the
+file-level summary by scanning chunk headers from the start of the chunk region
+up to `index_offset`. No such repair routine ships today — a torn write must be
+recovered out-of-band (e.g. re-running the writer) — but the on-disk layout is
+designed so that it is always possible. Callers that need durability across
+crashes should write to a temporary file and atomically rename it into place.
+
 ---
 
 ## 4. Compression & Encoding
-The `compression_type` field reserves an enum for a per-chunk block compression
-algorithm (`0 = none`, `1 = ZSTD`, `2 = LZ4`).
+The `compression_type` field (header offset 22) selects a per-chunk block
+compression algorithm applied uniformly to every chunk in the file:
+`0 = none`, `1 = ZSTD`, `2 = LZ4`.
 
-> **Status:** Not yet implemented. Chunks are currently stored uncompressed
-> (`compression_type = 0`), and `chunk_size` is the uncompressed size. Treat the
-> ZSTD/LZ4 values as reserved until a future version.
+The compression layer sits **below** the columnar/delta encoding of §2.2: a
+chunk is first built as its self-describing header + delta-encoded columns (the
+*payload*), and then, if a codec is set, that payload is compressed and wrapped
+in a small per-chunk frame:
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `uncompressed_size` | uint32 | Byte size of the payload after decoding (lets a reader size its decode buffer exactly) |
+| 4 | `payload` | bytes | The codec's compressed payload (e.g. a single ZSTD frame) |
+
+The index entry's `chunk_offset` points at this frame; `chunk_size` is the
+frame's byte size (`4 + payload`); and `chunk_crc32` is computed over the frame.
+Because the CRC and the time bounds (`chunk_time_base` / `chunk_last_timestamp`)
+all live in the index over the *on-disk* bytes, **corruption detection (CRC) and
+range pruning never need to decompress** — only chunks that actually fall in a
+query's window are decoded. The decode buffer size comes from
+`uncompressed_size`, and a decoded length disagreeing with it is treated as
+corruption. (The one part of `ticks_verify` that does decode a compressed chunk
+is the record-count cross-check, which reads each chunk's `num_records` from the
+decoded payload; the CRC pass itself runs on the on-disk bytes.)
+
+With `compression_type = 0` no frame is written: chunks are stored exactly as in
+§2.2 and the file is byte-compatible with version 4.
+
+> **Status:** ZSTD (`1`) is implemented. LZ4 (`2`) remains reserved — a reader
+> rejects a file (and `ticks_new_file` rejects a header) whose `compression_type`
+> it cannot decode. The ZSTD library is built via CMake `FetchContent`.
 
 ---
 
 ## 5. Version History
 | Version | Date | Changes |
 |----------|------|----------|
+| 5 | 2026-06-02 | Per-chunk block compression. When `compression_type` names a codec (ZSTD implemented), each chunk's columnar payload is compressed and wrapped in a 4-byte frame (`uncompressed_size` + payload); `chunk_size`/`chunk_crc32` describe the on-disk frame so verify and range pruning still need no decode. `compression_type = 0` files stay byte-compatible with v4. Added a `SCHEMA_*`-style guard rejecting unsupported codecs at open/create. |
 | 4 | 2026-06-02 | Schema-aware, generic columnar chunks. Added `schema_id` to the header (carved from reserved; region stays 72 bytes) selecting the record layout (`trade` = 3 columns, `quote` = 5 columns). The chunk header is now variable-length and self-describing per column (count + per-column base/width/encoding), so the format is generic over the column set. Dropped the per-column width bytes from each index entry (now authoritative in the chunk header), shrinking the entry 35 → 32 bytes. Added typed `ticks_add_quotes` / `ticks_iterator_next_quote` and a `SCHEMA_MISMATCH` status. |
 | 3 | 2026-06-02 | Added a denormalized file-level summary to the header — `record_count`, `min_timestamp`, `max_timestamp` — so a catalog can answer "how many ticks / what time span" from the header alone without reading the index (header region 48 → 72 bytes). All three are `0` for an empty file. `ticks_verify` now cross-checks the summary against the index and chunk headers. |
 | 2 | 2026-06-02 | Columnar (struct-of-arrays) chunk layout; delta encoding of every column (timestamps unsigned, price/volume zig-zag signed); self-describing per-chunk header (`num_records`, bases, delta widths); added `price_scale`/`volume_scale` and 6 reserved header bytes (header region 40 → 48 bytes); added `chunk_last_timestamp` to each index entry for full range pruning (index entry 27 → 35 bytes). |

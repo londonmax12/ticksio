@@ -47,8 +47,10 @@ struct ticks_iterator_t_internal {
     // reconstructed sequentially: cur[] holds the running absolute values of the
     // record at current_record_in_chunk (cur[0] is the timestamp); the per-column
     // pointers/widths/encodings are read from the self-describing chunk header.
-    uint8_t* chunk_buf;
+    uint8_t* chunk_buf;     // decoded (uncompressed) columnar chunk bytes
     uint32_t chunk_buf_cap;
+    uint8_t* comp_buf;      // raw on-disk bytes when the file is compressed (else unused)
+    uint32_t comp_buf_cap;
     uint32_t chunk_nrec;
     uint8_t  chunk_ncols;
     const uint8_t* cols[TICKS_MAX_COLUMNS]; // start of each column's delta region

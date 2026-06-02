@@ -6,6 +6,7 @@
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/ticksio_constants.h"
 #include "ticksio/ticksio_helpers.h"
+#include "ticksio/ticksio_compress.h"
 #include "ticksio/ticksio_platform.h"
 
 // Helper function to write data of a specific size to a buffer
@@ -68,7 +69,7 @@ static uint64_t column_delta(const uint64_t* cur, const uint64_t* prev, uint8_t 
 static create_chunk_result create_chunk(uint64_t* const row_index, const uint64_t* values,
                                         uint64_t num_entries, const ticks_schema_t* schema) {
     if (*row_index >= num_entries) {
-        perror("ERROR: row_index out of bounds in create_chunk\n");
+        fprintf(stderr, "ERROR: row_index out of bounds in create_chunk\n");
         return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_INVALID_ARGUMENTS};
     }
 
@@ -168,7 +169,7 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const uint64_
 // Appends a chunk's data to the file and adds its metadata to the in-memory index.
 ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_chunk_t* chunk) {
     if (handle == NULL || chunk == NULL || handle->file_stream == NULL || chunk->data_size == 0) {
-        perror("ERROR: Invalid arguments to append_chunk_and_update_index\n");
+        fprintf(stderr, "ERROR: Invalid arguments to append_chunk_and_update_index\n");
         return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
@@ -181,12 +182,43 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
 
     const uint64_t chunk_write_pos = handle->index_offset;
 
+    // Choose what actually lands on disk. With no compression the chunk's
+    // self-describing columnar bytes are written verbatim; with a codec they are
+    // compressed into a frame first (see ticksio_compress). The index entry's
+    // size and CRC always describe the on-disk bytes, so range pruning and
+    // ticks_verify work without decompressing.
+    const compression_type_e ctype = handle->header.compression_type;
+    const uint8_t* disk_data = chunk->data;
+    uint32_t disk_size = chunk->data_size;
+    uint8_t* compressed = NULL;
+
+    if (ctype != COMPRESSION_NONE) {
+        const size_t bound = ticks_compress_bound(ctype, chunk->data_size);
+        compressed = malloc(bound);
+        if (compressed == NULL) {
+            perror("ERROR: Unable to allocate compression buffer\n");
+            return TICKS_ERROR_MEMORY_ALLOCATION;
+        }
+        size_t out_size = 0;
+        ticks_status_e cs = ticks_compress_chunk(ctype, chunk->data, chunk->data_size,
+                                                 compressed, bound, &out_size);
+        if (cs != TICKS_OK) {
+            free(compressed);
+            fprintf(stderr, "ERROR: chunk compression failed (%d)\n", cs);
+            return cs;
+        }
+        disk_data = compressed;
+        disk_size = (uint32_t)out_size;
+    }
+
     if (ticks_fseek64(handle->file_stream, (int64_t)chunk_write_pos, SEEK_SET) != 0) {
+        free(compressed);
         perror("ERROR: ticks_fseek64 before chunk write failed");
         return TICKS_ERROR_FILE_IO;
     }
 
-    if (fwrite(chunk->data, 1, chunk->data_size, handle->file_stream) != chunk->data_size) {
+    if (fwrite(disk_data, 1, disk_size, handle->file_stream) != disk_size) {
+        free(compressed);
         perror("FATAL ERROR on fwrite (chunk data)");
         return TICKS_ERROR_FILE_IO;
     }
@@ -195,9 +227,11 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
         .chunk_time_base = chunk->time_base,
         .chunk_last_timestamp = chunk->last_timestamp,
         .chunk_offset = chunk_write_pos,
-        .chunk_size = chunk->data_size,
-        .chunk_crc32 = ticks_crc32(chunk->data, chunk->data_size)
+        .chunk_size = disk_size,
+        .chunk_crc32 = ticks_crc32(disk_data, disk_size)
     };
+
+    free(compressed); // CRC computed above; on-disk bytes no longer needed
 
     // Grow the in-memory index array with amortized O(1) doubling rather than
     // reallocating on every single chunk.
@@ -218,8 +252,9 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
     handle->index.entries[handle->index.num_entries] = new_index_entry;
     handle->index.num_entries++;
 
-    // The next chunk (or the index) will be written immediately after this one.
-    handle->index_offset = chunk_write_pos + chunk->data_size;
+    // The next chunk (or the index) will be written immediately after this one
+    // (disk_size, not the uncompressed size, when a codec is in use).
+    handle->index_offset = chunk_write_pos + disk_size;
 
     // Persist the updated index_offset at its fixed header location (LE).
     uint8_t off_buf[sizeof(uint64_t)];
@@ -243,15 +278,19 @@ ticks_status_e create_chunks(ticks_file_t* handle, const uint64_t* values, uint6
     uint64_t row_index = 0;
 
     while (row_index < num_entries) {
+        const uint64_t row_index_before = row_index;
         create_chunk_result result = create_chunk(&row_index, values, num_entries, schema);
         ticks_chunk_t* chunk = result.chunk;
         if (chunk == NULL || result.status != TICKS_OK) {
-            if (result.status == TICKS_ERROR_EMPTY_CHUNK) {
-                continue;
-            } 
-            else if (result.status != TICKS_OK) {
-                perror("ERROR: create_chunk failed\n");
+            if (result.status != TICKS_OK) {
+                fprintf(stderr, "ERROR: create_chunk failed (%d)\n", result.status);
                 return result.status;
+            }
+            // status == OK but no chunk produced: a successful call must always
+            // consume at least one row, otherwise this loop cannot terminate.
+            if (row_index <= row_index_before) {
+                fprintf(stderr, "ERROR: create_chunk made no progress\n");
+                return TICKS_ERROR_UNKNOWN;
             }
             continue;
         }
@@ -260,7 +299,7 @@ ticks_status_e create_chunks(ticks_file_t* handle, const uint64_t* values, uint6
         if (append_chunk_result != TICKS_OK) {
             free(chunk->data);
             free(chunk);
-            perror("ERROR: append_chunk_and_update_index failed\n");
+            fprintf(stderr, "ERROR: append_chunk_and_update_index failed (%d)\n", append_chunk_result);
             return append_chunk_result;
         }
         

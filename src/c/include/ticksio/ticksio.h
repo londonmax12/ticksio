@@ -143,5 +143,7 @@ ticks_status_e ticks_iterator_next_quote(ticks_iterator_t* iterator, quote_data_
 */
 ticks_status_e ticks_iterator_destroy(ticks_iterator_t* iterator);
 
-// TODO: Compression
+// Compression is configured per file via ticks_header_t.compression_type
+// (COMPRESSION_NONE / COMPRESSION_ZSTD) at ticks_new_file time; chunks are then
+// transparently (de)compressed by the add/iterate paths. See docs/ticks-format.md §4.
 #endif // TICKSIO_H
