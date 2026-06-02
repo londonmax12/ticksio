@@ -43,6 +43,10 @@ typedef struct {
     ticks_status_e status;
 } create_chunk_result;
 
+static size_e max_size(size_e a, size_e b) {
+    return a > b ? a : b;
+}
+
 static create_chunk_result create_chunk(uint64_t* const row_index, const trade_data_t* entries, uint64_t num_entries) {
     if (*row_index >= num_entries) {
         perror("ERROR: row_index out of bounds in create_chunk\n");
@@ -62,64 +66,81 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const trade_d
         return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
     }
 
-    // Pass 1: "Dry run" to determine the final data types and number of records for the chunk.
-    // Pass 2: "Serialization" to write the records using the determined data types.
+    // Each column is delta-encoded against the previous record, so the chunk's
+    // column widths are governed by how much consecutive ticks *move*, not by
+    // their absolute magnitude. The first record is captured absolutely in the
+    // *_base fields below.
+    //
+    // Pass 1: "Dry run" to determine the per-column delta widths and how many
+    //         records fit in the chunk's MAX_CHUNK_SIZE budget.
+    // Pass 2: "Serialization" — write the self-describing chunk header followed
+    //         by the three delta columns in struct-of-arrays order.
 
-    chunk->time_base = entries[*row_index].ms_since_epoch;
-    chunk->num_records = 0;
+    const uint64_t start = *row_index;
+    chunk->time_base = entries[start].ms_since_epoch;
+    chunk->price_base = entries[start].price;
+    chunk->volume_base = entries[start].volume;
+    chunk->num_records = 1; // the base record is always included
+
+    // A delta needs at least one byte, so widths start at the 1-byte minimum.
     chunk->timestamp_size = SIZE_8BIT;
     chunk->price_size = SIZE_8BIT;
     chunk->volume_size = SIZE_8BIT;
-    
-    const uint64_t start_row_index = *row_index;
-    uint64_t temp_row_index = *row_index;
 
-    // Determine optimal sizes and record count for this chunk.
-    for (; temp_row_index < num_entries; temp_row_index++) {
-        const uint64_t time_delta = entries[temp_row_index].ms_since_epoch - chunk->time_base;
-        size_e needed_ts_size = determine_min_size_uint64(time_delta);
-        size_e needed_p_size = determine_min_size_uint64(entries[temp_row_index].price);
-        size_e needed_v_size = determine_min_size_uint64(entries[temp_row_index].volume);
-        
-        size_e new_ts_size = (needed_ts_size > chunk->timestamp_size) ? needed_ts_size : chunk->timestamp_size;
-        size_e new_p_size = (needed_p_size > chunk->price_size) ? needed_p_size : chunk->price_size;
-        size_e new_v_size = (needed_v_size > chunk->volume_size) ? needed_v_size : chunk->volume_size;
-        
-        uint64_t potential_total_size = (chunk->num_records + 1) * (uint64_t)(new_ts_size + new_p_size + new_v_size);
-        
+    for (uint64_t i = start + 1; i < num_entries; i++) {
+        // Timestamps are non-decreasing, so their deltas are unsigned. Price and
+        // volume can move either way, so their deltas are zig-zag-encoded.
+        const uint64_t ts_delta = entries[i].ms_since_epoch - entries[i - 1].ms_since_epoch;
+        const uint64_t price_delta = zigzag_encode((int64_t)(entries[i].price - entries[i - 1].price));
+        const uint64_t volume_delta = zigzag_encode((int64_t)(entries[i].volume - entries[i - 1].volume));
+
+        const size_e new_ts = max_size(chunk->timestamp_size, determine_min_size_uint64(ts_delta));
+        const size_e new_p = max_size(chunk->price_size, determine_min_size_uint64(price_delta));
+        const size_e new_v = max_size(chunk->volume_size, determine_min_size_uint64(volume_delta));
+
+        // Records start..i contribute (i - start) deltas to the three columns.
+        const uint64_t num_deltas = i - start;
+        const uint64_t potential_total_size =
+            TICKS_CHUNK_HEADER_DISK_SIZE + num_deltas * (uint64_t)(new_ts + new_p + new_v);
+
         if (potential_total_size > MAX_CHUNK_SIZE) {
             break; // This record won't fit, finalize chunk before it.
         }
-        
-        chunk->timestamp_size = new_ts_size;
-        chunk->price_size = new_p_size;
-        chunk->volume_size = new_v_size;
+
+        chunk->timestamp_size = new_ts;
+        chunk->price_size = new_p;
+        chunk->volume_size = new_v;
         chunk->num_records++;
     }
 
-    // If no records could be added, handle gracefully.
-    if (chunk->num_records == 0) {
-        if (*row_index == start_row_index) {
-            (*row_index)++; // Advance to prevent infinite loop.
-        }
+    // Serialize the self-describing chunk header.
+    uint8_t* const h = chunk->data;
+    le_put_u32(h + 0, chunk->num_records);
+    le_put_u64(h + 4, chunk->time_base);
+    le_put_u64(h + 12, chunk->price_base);
+    le_put_u64(h + 20, chunk->volume_base);
+    h[28] = (uint8_t)chunk->timestamp_size;
+    h[29] = (uint8_t)chunk->price_size;
+    h[30] = (uint8_t)chunk->volume_size;
 
-        free(chunk->data);
-        free(chunk);
-        perror("ERROR: Unable to fit any records into chunk due to size constraints\n");
-        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_EMPTY_CHUNK};
+    // Serialize the three delta columns (timestamps, then prices, then volumes).
+    const uint64_t num_deltas = chunk->num_records - 1;
+    uint8_t* ts_ptr = chunk->data + TICKS_CHUNK_HEADER_DISK_SIZE;
+    uint8_t* price_ptr = ts_ptr + num_deltas * (uint64_t)chunk->timestamp_size;
+    uint8_t* volume_ptr = price_ptr + num_deltas * (uint64_t)chunk->price_size;
+
+    for (uint64_t i = start + 1; i < start + chunk->num_records; i++) {
+        const uint64_t ts_delta = entries[i].ms_since_epoch - entries[i - 1].ms_since_epoch;
+        const uint64_t price_delta = zigzag_encode((int64_t)(entries[i].price - entries[i - 1].price));
+        const uint64_t volume_delta = zigzag_encode((int64_t)(entries[i].volume - entries[i - 1].volume));
+        write_data(&ts_ptr, ts_delta, chunk->timestamp_size);
+        write_data(&price_ptr, price_delta, chunk->price_size);
+        write_data(&volume_ptr, volume_delta, chunk->volume_size);
     }
 
-    // Serialize the records using the determined optimal sizes.
-    uint8_t* data_ptr = chunk->data;
-    for (uint64_t i = start_row_index; i < start_row_index + chunk->num_records; ++i) {
-        const uint64_t time_delta = entries[i].ms_since_epoch - chunk->time_base;
-        write_data(&data_ptr, time_delta, chunk->timestamp_size);
-        write_data(&data_ptr, entries[i].price, chunk->price_size);
-        write_data(&data_ptr, entries[i].volume, chunk->volume_size);
-    }
-    
-    chunk->data_size = data_ptr - chunk->data;
-    *row_index = start_row_index + chunk->num_records; // Advance the main index
+    chunk->data_size = (uint32_t)(TICKS_CHUNK_HEADER_DISK_SIZE +
+        num_deltas * (uint64_t)(chunk->timestamp_size + chunk->price_size + chunk->volume_size));
+    *row_index = start + chunk->num_records; // Advance the main index
 
     return (create_chunk_result){.chunk = chunk, .status = TICKS_OK};
 }

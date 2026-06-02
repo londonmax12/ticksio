@@ -52,6 +52,11 @@ typedef struct {
     char country[TICKS_COUNTRY_SIZE];
     compression_type_e compression_type;
     endian_e endianness;
+    // Base-10 exponents giving the real-world value of the integer columns:
+    // real_price = price * 10^price_scale (e.g. price_scale = -2 → prices are
+    // stored in cents). Both default to 0 (stored values are the real values).
+    int8_t price_scale;
+    int8_t volume_scale;
 } ticks_header_t;
 
 // --- Index structures ---
@@ -70,12 +75,17 @@ typedef struct {
 } ticks_index_t;
 
 // --- Chunk structures ---
+// Columns are delta-encoded against the previous record; the first record of
+// each column is stored absolutely in the *_base fields. The *_size fields are
+// therefore the per-delta widths, not the widths of the absolute values.
 typedef struct {
-    uint64_t time_base;
+    uint64_t time_base;   // absolute ms of the first tick in the chunk
+    uint64_t price_base;  // absolute price of the first tick
+    uint64_t volume_base; // absolute volume of the first tick
     uint32_t num_records;
-    size_e timestamp_size;
-    size_e price_size;
-    size_e volume_size;
+    size_e timestamp_size; // width of each timestamp delta
+    size_e price_size;     // width of each zig-zag price delta
+    size_e volume_size;    // width of each zig-zag volume delta
     uint8_t* data;
     uint32_t data_size;
 } ticks_chunk_t;

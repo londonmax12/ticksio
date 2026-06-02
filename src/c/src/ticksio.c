@@ -118,6 +118,8 @@ ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, tick
     strncpy(handle->header.currency, header->currency, TICKS_CURRENCY_SIZE);
     strncpy(handle->header.country, header->country, TICKS_COUNTRY_SIZE);
     handle->header.compression_type = header->compression_type;
+    handle->header.price_scale = header->price_scale;
+    handle->header.volume_scale = header->volume_scale;
 
     // Write data to the file
     if (write_initial_data(handle->file_stream, (struct ticks_file_t_internal*)handle) != 0) {
@@ -267,7 +269,7 @@ ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t
     if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
-    // Timestamps are delta-encoded against each chunk's base as unsigned values,
+    // Timestamps are delta-encoded against the previous tick as unsigned values,
     // so the data must be non-decreasing in time. Validate the batch (and its
     // continuity with previously written data) before writing anything.
     uint64_t prev = handle->has_data ? handle->last_timestamp : 0;

@@ -10,7 +10,7 @@ extern "C" {
 // --- Header constants ---
 #define TICKS_MAGIC "TICK"
 #define TICKS_MAGIC_SIZE 4
-#define TICKS_VERSION 1
+#define TICKS_VERSION 2
 #define TICKS_TICKER_SIZE 8
 #define TICKS_CURRENCY_SIZE 3
 #define TICKS_COUNTRY_SIZE 2
@@ -29,9 +29,12 @@ extern "C" {
 //   18     2    country            (char[2])
 //   20     2    asset_class        (uint16)
 //   22     2    compression_type   (uint16)
-//   24     8    index_offset       (uint64)
-//   32     8    index_size         (uint64)
-//   40     ...  chunk data ...
+//   24     1    price_scale        (int8, base-10 exponent: real = stored * 10^scale)
+//   25     1    volume_scale       (int8, base-10 exponent)
+//   26     6    reserved           (zero; room for forward-compatible fields)
+//   32     8    index_offset       (uint64)
+//   40     8    index_size         (uint64)
+//   48     ...  chunk data ...
 #define TICKS_OFF_MAGIC         0
 #define TICKS_OFF_VERSION       4
 #define TICKS_OFF_ENDIANNESS    6
@@ -40,11 +43,17 @@ extern "C" {
 #define TICKS_OFF_COUNTRY       18
 #define TICKS_OFF_ASSET_CLASS   20
 #define TICKS_OFF_COMPRESSION   22
-#define TICKS_OFF_INDEX_OFFSET  24
-#define TICKS_OFF_INDEX_SIZE    32
-#define TICKS_HEADER_REGION_SIZE 40
+#define TICKS_OFF_PRICE_SCALE   24
+#define TICKS_OFF_VOLUME_SCALE  25
+#define TICKS_OFF_RESERVED      26
+#define TICKS_OFF_INDEX_OFFSET  32
+#define TICKS_OFF_INDEX_SIZE    40
+#define TICKS_HEADER_REGION_SIZE 48
 
-// Each index entry on disk (little-endian, no padding):
+// Each index entry on disk (little-endian, no padding). The three column-width
+// bytes record the *delta* widths of the chunk's columns and are redundant with
+// the chunk's own header (which is authoritative); they are kept here so the
+// index alone is enough for fast iteration and cross-checking.
 //   0  8 chunk_time_base (uint64)
 //   8  8 chunk_offset    (uint64)
 //   16 4 chunk_size      (uint32)
@@ -53,6 +62,21 @@ extern "C" {
 //   25 1 price_size      (uint8)
 //   26 1 volume_size     (uint8)
 #define TICKS_INDEX_ENTRY_DISK_SIZE 27
+
+// Each chunk begins with a self-describing header (little-endian, no padding)
+// so a chunk can be decoded without consulting the index. Columns follow the
+// header in struct-of-arrays order: all timestamp deltas, then all price
+// deltas, then all volume deltas. The first record of each column is stored
+// absolutely in the *_base fields; subsequent records are deltas from the
+// previous record (timestamps unsigned; price/volume zig-zag-encoded signed).
+//   0  4 num_records       (uint32)
+//   4  8 ts_base           (uint64)  absolute ms of first tick (== chunk_time_base)
+//   12 8 price_base        (uint64)  absolute price of first tick
+//   20 8 volume_base       (uint64)  absolute volume of first tick
+//   28 1 ts_delta_size     (uint8)   width of each timestamp delta (1/2/4/8)
+//   29 1 price_delta_size  (uint8)   width of each zig-zag price delta
+//   30 1 volume_delta_size (uint8)   width of each zig-zag volume delta
+#define TICKS_CHUNK_HEADER_DISK_SIZE 31
 
 // --- Chunking constants ---
 #define MAX_CHUNK_SIZE 16777216 // 16 MB

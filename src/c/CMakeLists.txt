@@ -21,3 +21,9 @@ target_include_directories(sandbox PRIVATE
     include
 )
 target_link_libraries(sandbox PRIVATE ticksio)
+
+# Round-trip test: writes synthetic ticks, then decodes the raw chunk bytes and
+# checks every value reconstructs (columnar + delta + zig-zag).
+add_executable(roundtrip tests/roundtrip.c)
+target_include_directories(roundtrip PRIVATE include)
+target_link_libraries(roundtrip PRIVATE ticksio)

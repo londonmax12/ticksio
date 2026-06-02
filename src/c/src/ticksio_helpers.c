@@ -23,6 +23,17 @@ int is_little_endian() {
     return (y[0] == 1);
 }
 
+// --- Zig-zag (de)coding ---
+uint64_t zigzag_encode(int64_t value) {
+    // Arithmetic right shift replicates the sign bit; cast to unsigned keeps the
+    // shift well-defined. (value >> 63) is 0 for >= 0 and all-ones for < 0.
+    return ((uint64_t)value << 1) ^ (uint64_t)(value >> 63);
+}
+
+int64_t zigzag_decode(uint64_t value) {
+    return (int64_t)(value >> 1) ^ -(int64_t)(value & 1u);
+}
+
 // --- Little-endian primitives ---
 void le_put_u16(uint8_t* buf, uint16_t value) {
     buf[0] = (uint8_t)(value & 0xFF);
@@ -82,6 +93,9 @@ void serialize_header(uint8_t* buf, const ticks_header_t* header,
     memcpy(buf + TICKS_OFF_COUNTRY, header->country, TICKS_COUNTRY_SIZE);
     le_put_u16(buf + TICKS_OFF_ASSET_CLASS, header->asset_class);
     le_put_u16(buf + TICKS_OFF_COMPRESSION, header->compression_type);
+    buf[TICKS_OFF_PRICE_SCALE] = (uint8_t)header->price_scale;
+    buf[TICKS_OFF_VOLUME_SCALE] = (uint8_t)header->volume_scale;
+    // Bytes [TICKS_OFF_RESERVED, TICKS_OFF_INDEX_OFFSET) stay zero (memset above).
     le_put_u64(buf + TICKS_OFF_INDEX_OFFSET, index_offset);
     le_put_u64(buf + TICKS_OFF_INDEX_SIZE, index_size);
 }
@@ -95,6 +109,8 @@ void deserialize_header(const uint8_t* buf, ticks_header_t* header,
     memcpy(header->country, buf + TICKS_OFF_COUNTRY, TICKS_COUNTRY_SIZE);
     header->asset_class = le_get_u16(buf + TICKS_OFF_ASSET_CLASS);
     header->compression_type = le_get_u16(buf + TICKS_OFF_COMPRESSION);
+    header->price_scale = (int8_t)buf[TICKS_OFF_PRICE_SCALE];
+    header->volume_scale = (int8_t)buf[TICKS_OFF_VOLUME_SCALE];
     if (index_offset) *index_offset = le_get_u64(buf + TICKS_OFF_INDEX_OFFSET);
     if (index_size) *index_size = le_get_u64(buf + TICKS_OFF_INDEX_SIZE);
 }

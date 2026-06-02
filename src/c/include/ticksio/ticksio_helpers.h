@@ -12,6 +12,13 @@ extern "C" {
 size_e determine_min_size_uint64(uint64_t value);
 int is_little_endian();
 
+// --- Zig-zag (de)coding ---
+// Map a signed delta onto an unsigned value whose magnitude tracks |delta|, so
+// small positive *and* negative deltas pack into few bytes:
+//   0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3, ...
+uint64_t zigzag_encode(int64_t value);
+int64_t  zigzag_decode(uint64_t value);
+
 // --- Little-endian (de)serialization primitives ---
 // These read/write fixed-width values at an explicit byte offset, independent
 // of the host's native endianness, so the on-disk format is portable.

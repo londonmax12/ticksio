@@ -25,6 +25,10 @@ int main() {
     strcpy(new_header->country, "US");
     new_header->asset_class = 10;
     new_header->compression_type = 0;
+    // The CSV reader scales decimal prices into integer cents, so the real price
+    // is the stored integer * 10^-2. Volume is stored as-is.
+    new_header->price_scale = -2;
+    new_header->volume_scale = 0;
 
     ticks_file_t* create_handle = NULL;
     ticks_status_e create_open_status = ticks_new_file(test_filename, new_header, &create_handle);
@@ -94,7 +98,9 @@ int main() {
         printf("├── Ticker: %s\n", ticks_header.ticker);
         printf("├── Currency: %s\n", ticks_header.currency);
         printf("├── Country: %s\n", ticks_header.country);
-        printf("└── Compression Type: %hu\n", ticks_header.compression_type);
+        printf("├── Compression Type: %hu\n", ticks_header.compression_type);
+        printf("├── Price Scale: %d (real = stored * 10^%d)\n", ticks_header.price_scale, ticks_header.price_scale);
+        printf("└── Volume Scale: %d\n", ticks_header.volume_scale);
     } else {
         print_error("ticks_get_asset_class", get_header_status);
     }
