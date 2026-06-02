@@ -88,15 +88,21 @@ static int read_csv_chunk(FILE *fp, trade_data_t *buffer, int max_records)
             continue;
         }
 
+        // Price is a decimal value in the CSV (e.g. dollars); the format stores
+        // an integer price, so it is scaled to cents. Volume is an integer.
+        double temp_price = 0.0;
+        unsigned long long temp_volume = 0;
         int items_matched = sscanf(
             line,
-            "%[^,],%lf,%d",
+            "%[^,],%lf,%llu",
             temp_timestamp,
-            &buffer[records_read].price,
-            &buffer[records_read].volume
+            &temp_price,
+            &temp_volume
         );
 
         if (items_matched == 3) {
+            buffer[records_read].price = (uint64_t)(temp_price * 100.0 + 0.5);
+            buffer[records_read].volume = (uint64_t)temp_volume;
             buffer[records_read].ms_since_epoch = timestamp_to_ms(temp_timestamp);
             if (buffer[records_read].ms_since_epoch != 0) {
                 records_read++;

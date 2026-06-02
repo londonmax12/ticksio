@@ -3,38 +3,29 @@
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/ticksio_chunks.h"
 #include "ticksio/ticksio_index.h"
-#include "ticksio/ticksio.h"
+#include "ticksio/ticksio_helpers.h"
+#include "ticksio/ticksio_constants.h"
+#include "ticksio/ticksio_platform.h"
 
-// Helper function to write the magic and header
+// Helper function to write the magic + header region using explicit
+// little-endian serialization (no struct/padding written to disk).
 static ticks_status_e write_initial_data(FILE *file, struct ticks_file_t_internal* handle) {
-    size_t magic_len = strlen(TICKS_MAGIC);
-    
-    if (fwrite(TICKS_MAGIC, 1, magic_len, file) != magic_len)
-        return TICKS_ERROR_FILE_IO;
-
-    if (fwrite(&handle->header, 1, sizeof(ticks_header_t), file) != sizeof(ticks_header_t))
-        return TICKS_ERROR_FILE_IO;
-    
-    long current_offset_long = ftell(file);
-    if (current_offset_long == -1L)
-        return TICKS_ERROR_FILE_IO;
-
-    // Offset after header + index_offset size (uint64_t) + index_size size (uint64_t)
-    uint64_t index_start_offset = (uint64_t)current_offset_long + sizeof(uint64_t) + sizeof (uint64_t);
-    if (fwrite(&index_start_offset, 1, sizeof(uint64_t), file) != sizeof(uint64_t))
-        return TICKS_ERROR_FILE_IO;
-
-    handle->index_offset = index_start_offset;
+    // The chunk data begins immediately after the fixed-size header region.
+    handle->index_offset = TICKS_HEADER_REGION_SIZE;
     handle->index_size = 0;
-    
-    // Index size is initially zero, a temporary placeholder is used to safely pass 0 value
-    uint64_t zero_placeholder = 0;
-    if (fwrite(&zero_placeholder, 1, sizeof(uint64_t), file) != sizeof(uint64_t))
+
+    uint8_t buf[TICKS_HEADER_REGION_SIZE];
+    serialize_header(buf, &handle->header, handle->index_offset, handle->index_size);
+
+    if (ticks_fseek64(file, 0, SEEK_SET) != 0)
+        return TICKS_ERROR_FILE_IO;
+    if (fwrite(buf, 1, TICKS_HEADER_REGION_SIZE, file) != TICKS_HEADER_REGION_SIZE)
         return TICKS_ERROR_FILE_IO;
 
     handle->index.num_entries = 0;
     handle->index.entries = NULL;
-    
+    handle->index_capacity = 0;
+
     return TICKS_OK;
 }
 
@@ -46,32 +37,52 @@ static ticks_status_e read_index_table(FILE *file, struct ticks_file_t_internal*
 
     // Initialize index entries to NULL
     handle->index.entries = NULL;
+    handle->index.num_entries = 0;
+    handle->index_capacity = 0;
 
     if (handle->index_size == 0)
-        return TICKS_ERROR_INVALID_FORMAT; // No entries to reads
+        return TICKS_ERROR_INVALID_FORMAT; // No entries to read
 
-    // Allocate memory for the index entries
-    uint32_t num_entries = handle->index_size / sizeof(ticks_index_entry_t);
-    handle->index.num_entries = num_entries;
-    handle->index.entries = malloc(handle->index_size);
+    // The index is a packed array of fixed-size, little-endian entries.
+    if (handle->index_size % TICKS_INDEX_ENTRY_DISK_SIZE != 0)
+        return TICKS_ERROR_INVALID_FORMAT;
 
-    if (handle->index.entries == NULL)
+    uint32_t num_entries = (uint32_t)(handle->index_size / TICKS_INDEX_ENTRY_DISK_SIZE);
+
+    // Read the raw index bytes into a temporary buffer, then deserialize.
+    uint8_t* raw = malloc(handle->index_size);
+    if (raw == NULL)
         return TICKS_ERROR_MEMORY_ALLOCATION;
 
-    // Move file pointer to the index offset
-    if (fseek(file, handle->index_offset, SEEK_SET) != 0) {
+    handle->index.entries = malloc((size_t)num_entries * sizeof(ticks_index_entry_t));
+    if (handle->index.entries == NULL) {
+        free(raw);
+        return TICKS_ERROR_MEMORY_ALLOCATION;
+    }
+
+    // Move file pointer to the index offset (64-bit safe)
+    if (ticks_fseek64(file, (int64_t)handle->index_offset, SEEK_SET) != 0) {
+        free(raw);
         free(handle->index.entries);
         handle->index.entries = NULL;
         return TICKS_ERROR_FILE_IO;
     }
 
-    // Read index entries to memory
-    if (fread(handle->index.entries, 1, handle->index_size, file) != handle->index_size) {
+    if (fread(raw, 1, handle->index_size, file) != handle->index_size) {
+        free(raw);
         free(handle->index.entries);
         handle->index.entries = NULL;
         return TICKS_ERROR_FILE_IO;
     }
 
+    for (uint32_t i = 0; i < num_entries; i++)
+        deserialize_index_entry(raw + (size_t)i * TICKS_INDEX_ENTRY_DISK_SIZE,
+                                &handle->index.entries[i]);
+
+    handle->index.num_entries = num_entries;
+    handle->index_capacity = num_entries;
+
+    free(raw);
     return TICKS_OK;
 }
 
@@ -80,12 +91,6 @@ ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, tick
     if (filename == NULL || header == NULL) 
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
-    if (header->endianness == ENDIAN_UNDEFINED) {
-        if (is_little_endian())
-            header->endianness = ENDIAN_LITTLE;
-        else
-            header->endianness = ENDIAN_BIG;
-    }
     // Allocate memory for the internal handle structure and zero memory
     struct ticks_file_t_internal* handle = malloc(sizeof(struct ticks_file_t_internal));
     memset(handle, 0, sizeof(struct ticks_file_t_internal));
@@ -103,7 +108,11 @@ ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, tick
         return TICKS_ERROR_FILE_IO;
     }
 
-    // Store a copy of the header internally
+    // Store a copy of the header internally. The on-disk byte order is always
+    // little-endian (see serialize_header), so the recorded endianness reflects
+    // that rather than the host's native order.
+    handle->header.version = TICKS_VERSION;
+    handle->header.endianness = ENDIAN_LITTLE;
     handle->header.asset_class = header->asset_class;
     strncpy(handle->header.ticker, header->ticker, TICKS_TICKER_SIZE);
     strncpy(handle->header.currency, header->currency, TICKS_CURRENCY_SIZE);
@@ -133,48 +142,44 @@ ticks_status_e ticks_open(const char* filename, const char* mode, ticks_file_t**
     if (handle == NULL)
         return TICKS_ERROR_MEMORY_ALLOCATION;
 
+    // Zero the handle so partially-initialized fields are well-defined.
+    memset(handle, 0, sizeof(struct ticks_file_t_internal));
+
     // Open the file in specified mode
     handle->file_stream = fopen(filename, mode);
     if (handle->file_stream == NULL) {
         free(handle);
         return TICKS_ERROR_FILE_IO;
     }
-    
-    // Read and Validate the Magic Number
-    char magic_buffer[sizeof(TICKS_MAGIC)];
-    size_t magic_len = strlen(TICKS_MAGIC); 
 
-    if (fread(magic_buffer, 1, magic_len, handle->file_stream) != magic_len) {
+    // Read the fixed-size header region (magic + header + index pointers) in one go.
+    uint8_t region[TICKS_HEADER_REGION_SIZE];
+    if (fread(region, 1, TICKS_HEADER_REGION_SIZE, handle->file_stream) != TICKS_HEADER_REGION_SIZE) {
         // File too short or read error
         fclose(handle->file_stream);
         free(handle);
-        return feof(handle->file_stream) ? TICKS_ERROR_INVALID_FORMAT : TICKS_ERROR_FILE_IO;
-    }
-
-    if (strncmp(magic_buffer, TICKS_MAGIC, magic_len) != 0) {
-        fclose(handle->file_stream);
-        free(handle);
         return TICKS_ERROR_INVALID_FORMAT;
     }
-    
-    // Read the Header Structure into the internal state
-    if (fread(&handle->header, 1, sizeof(ticks_header_t), handle->file_stream) != sizeof(ticks_header_t)) {
-        // Read error or file truncated
+
+    // Validate the magic number.
+    if (memcmp(region + TICKS_OFF_MAGIC, TICKS_MAGIC, TICKS_MAGIC_SIZE) != 0) {
         fclose(handle->file_stream);
         free(handle);
         return TICKS_ERROR_INVALID_FORMAT;
     }
 
-    // TODO: Add more robust error checking to this function
-
-    // Read the Index Offset and Size
-    if (fread(&handle->index_offset, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t) || fread(&handle->index_size, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t)) {
+    // Validate the format version.
+    uint16_t version = le_get_u16(region + TICKS_OFF_VERSION);
+    if (version == 0 || version > TICKS_VERSION) {
         fclose(handle->file_stream);
         free(handle);
-        return TICKS_ERROR_FILE_IO;
+        return TICKS_ERROR_INVALID_FORMAT;
     }
 
-    // Read the Index Table into memory
+    // Deserialize the header fields and index pointers from the region buffer.
+    deserialize_header(region, &handle->header, &handle->index_offset, &handle->index_size);
+
+    // Read the Index Table into memory (absence of entries is not fatal).
     read_index_table(handle->file_stream, handle);
 
     *out_handle = (ticks_file_t*)handle;
@@ -202,8 +207,8 @@ ticks_status_e ticks_open_write(const char* filename, ticks_file_t** out_handle)
         return open_status;
     }
 
-    handle->mode = FILE_MODE_READ;
-    
+    handle->mode = FILE_MODE_WRITE;
+
     *out_handle = handle;
 
     return TICKS_OK;
@@ -258,9 +263,19 @@ ticks_status_e ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size) {
     return TICKS_OK;
 }
 
-ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries) { 
+ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries) {
     if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    // Timestamps are delta-encoded against each chunk's base as unsigned values,
+    // so the data must be non-decreasing in time. Validate the batch (and its
+    // continuity with previously written data) before writing anything.
+    uint64_t prev = handle->has_data ? handle->last_timestamp : 0;
+    for (uint64_t i = 0; i < num_entries; i++) {
+        if ((handle->has_data || i > 0) && data[i].ms_since_epoch < prev)
+            return TICKS_ERROR_UNSORTED_DATA;
+        prev = data[i].ms_since_epoch;
+    }
 
     // Create chunks from the provided data
     ticks_status_e create_chunks_result = create_chunks(handle, data, num_entries);
@@ -271,6 +286,51 @@ ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t
     if (create_index_result != TICKS_OK)
         return create_index_result;
 
+    // Record the high-water timestamp so subsequent calls stay ordered.
+    handle->last_timestamp = data[num_entries - 1].ms_since_epoch;
+    handle->has_data = 1;
+
+    return TICKS_OK;
+}
+
+ticks_status_e ticks_verify(ticks_file_t* handle) {
+    if (handle == NULL || handle->file_stream == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    if (handle->index.num_entries == 0 || handle->index.entries == NULL)
+        return TICKS_OK; // Nothing stored, nothing to corrupt.
+
+    // Reuse a single buffer sized to the largest chunk to avoid per-chunk allocs.
+    uint32_t max_chunk = 0;
+    for (uint32_t i = 0; i < handle->index.num_entries; i++) {
+        if (handle->index.entries[i].chunk_size > max_chunk)
+            max_chunk = handle->index.entries[i].chunk_size;
+    }
+    if (max_chunk == 0)
+        return TICKS_OK;
+
+    uint8_t* buf = malloc(max_chunk);
+    if (buf == NULL)
+        return TICKS_ERROR_MEMORY_ALLOCATION;
+
+    for (uint32_t i = 0; i < handle->index.num_entries; i++) {
+        const ticks_index_entry_t* e = &handle->index.entries[i];
+
+        if (ticks_fseek64(handle->file_stream, (int64_t)e->chunk_offset, SEEK_SET) != 0) {
+            free(buf);
+            return TICKS_ERROR_FILE_IO;
+        }
+        if (fread(buf, 1, e->chunk_size, handle->file_stream) != e->chunk_size) {
+            free(buf);
+            return TICKS_ERROR_FILE_IO;
+        }
+        if (ticks_crc32(buf, e->chunk_size) != e->chunk_crc32) {
+            free(buf);
+            return TICKS_ERROR_CORRUPT_DATA;
+        }
+    }
+
+    free(buf);
     return TICKS_OK;
 }
 
@@ -293,6 +353,10 @@ const char* ticks_status_to_string(ticks_status_e status)
             return "Invalid Format";
         case TICKS_ERROR_EMPTY_CHUNK:
             return "Empty Chunk";
+        case TICKS_ERROR_UNSORTED_DATA:
+            return "Unsorted Data (timestamps must be non-decreasing)";
+        case TICKS_ERROR_CORRUPT_DATA:
+            return "Corrupt Data (checksum mismatch)";
         default:
             return "Unrecognized Status Code";   
     }

@@ -5,6 +5,8 @@
 #include "ticksio/ticksio_types.h"
 #include "ticksio/ticksio_internal.h"
 #include "ticksio/ticksio_constants.h"
+#include "ticksio/ticksio_helpers.h"
+#include "ticksio/ticksio_platform.h"
 
 // Helper function to write data of a specific size to a buffer
 static void write_data(uint8_t** buffer, uint64_t value, size_e size) {
@@ -138,8 +140,8 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
 
     const uint64_t chunk_write_pos = handle->index_offset;
 
-    if (_fseeki64(handle->file_stream, chunk_write_pos, SEEK_SET) != 0) {
-        perror("ERROR: _fseeki64 before chunk write failed");
+    if (ticks_fseek64(handle->file_stream, (int64_t)chunk_write_pos, SEEK_SET) != 0) {
+        perror("ERROR: ticks_fseek64 before chunk write failed");
         return TICKS_ERROR_FILE_IO;
     }
 
@@ -147,49 +149,47 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
         perror("FATAL ERROR on fwrite (chunk data)");
         return TICKS_ERROR_FILE_IO;
     }
-    
-    handle->index_offset = chunk_write_pos + chunk->data_size;
-    
+
     const ticks_index_entry_t new_index_entry = {
         .chunk_time_base = chunk->time_base,
         .chunk_offset = chunk_write_pos,
         .chunk_size = chunk->data_size,
+        .chunk_crc32 = ticks_crc32(chunk->data, chunk->data_size),
         .timestamp_size = chunk->timestamp_size,
         .price_size = chunk->price_size,
         .volume_size = chunk->volume_size
     };
-    
-    // TODO: This approach resizes the array for every single chunk, which is inefficient
-    // for a large number of chunks. It is necessary because the ticks_file_t_internal
-    // struct does not have a field to track the allocated capacity of the index array,
-    // preventing a more efficient growth strategy (e.g., doubling capacity).
-    ticks_index_entry_t* new_entries = realloc(handle->index.entries, (handle->index.num_entries + 1) * sizeof(ticks_index_entry_t));
 
-    if (new_entries == NULL) {
-        // If realloc fails, the original handle->index.entries pointer is still valid.
-        perror("ERROR: Unable to allocate memory for index entries\n");
-        return TICKS_ERROR_MEMORY_ALLOCATION;
+    // Grow the in-memory index array with amortized O(1) doubling rather than
+    // reallocating on every single chunk.
+    if (handle->index.num_entries == handle->index_capacity) {
+        uint32_t new_capacity = (handle->index_capacity == 0) ? 16 : handle->index_capacity * 2;
+        ticks_index_entry_t* new_entries =
+            realloc(handle->index.entries, (size_t)new_capacity * sizeof(ticks_index_entry_t));
+        if (new_entries == NULL) {
+            // On failure the original handle->index.entries pointer is still valid.
+            perror("ERROR: Unable to allocate memory for index entries\n");
+            return TICKS_ERROR_MEMORY_ALLOCATION;
+        }
+        handle->index.entries = new_entries;
+        handle->index_capacity = new_capacity;
     }
-    handle->index.entries = new_entries;
 
-    // Add the new entry to the now-larger array and increment the count.
+    // Add the new entry and increment the count.
     handle->index.entries[handle->index.num_entries] = new_index_entry;
     handle->index.num_entries++;
 
-    // Get the current file position to update index_offset
-    long current_pos_long = ftell(handle->file_stream);
-    if (current_pos_long == -1L) {
-        perror("ERROR: ftell failed after writing chunk data");
-        return TICKS_ERROR_FILE_IO;
-    }
-    handle->index_offset = (uint64_t)current_pos_long;
+    // The next chunk (or the index) will be written immediately after this one.
+    handle->index_offset = chunk_write_pos + chunk->data_size;
 
-    // Write new index_offset
-    if (_fseeki64(handle->file_stream, 4 + sizeof(ticks_header_t), SEEK_SET) != 0) {
-        perror("ERROR: _fseeki64 before index_offset update failed");
+    // Persist the updated index_offset at its fixed header location (LE).
+    uint8_t off_buf[sizeof(uint64_t)];
+    le_put_u64(off_buf, handle->index_offset);
+    if (ticks_fseek64(handle->file_stream, TICKS_OFF_INDEX_OFFSET, SEEK_SET) != 0) {
+        perror("ERROR: ticks_fseek64 before index_offset update failed");
         return TICKS_ERROR_FILE_IO;
     }
-    if (fwrite(&handle->index_offset, 1, sizeof(uint64_t), handle->file_stream) != sizeof(uint64_t)) {
+    if (fwrite(off_buf, 1, sizeof(off_buf), handle->file_stream) != sizeof(off_buf)) {
         perror("ERROR: fwrite (index_offset update)");
         return TICKS_ERROR_FILE_IO;
     }

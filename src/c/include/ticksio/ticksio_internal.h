@@ -25,8 +25,11 @@ struct ticks_file_t_internal {
     uint64_t index_offset; // Byte offset where the index data starts in the file
     uint64_t index_size;   // Size of the index data in bytes
     ticks_index_t index;   // The in-memory index structure
+    uint32_t index_capacity; // Allocated capacity of index.entries (for amortized growth)
     ticks_chunk_t* chunks; // The in-memory chunk structures
     uint32_t num_chunks;   // Number of chunks in the chunks array
+    uint64_t last_timestamp; // Timestamp of the most recently written tick (ordering check)
+    int has_data;          // Whether any tick has been written yet
     enum file_mode_e mode;    // File mode (read or write)
 };
 

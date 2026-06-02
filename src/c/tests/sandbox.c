@@ -89,6 +89,7 @@ int main() {
     ticks_status_e get_header_status = ticks_get_header(read_handle, &ticks_header);
     if (get_header_status == TICKS_OK) {
         printf("Header Information\n");
+        printf("├── Version: %hu\n", ticks_header.version);
         printf("├── Asset Class: %hu\n", ticks_header.asset_class);
         printf("├── Ticker: %s\n", ticks_header.ticker);
         printf("├── Currency: %s\n", ticks_header.currency);
@@ -101,7 +102,7 @@ int main() {
     printf("\nIndex Information\n");
     uint64_t index_offset, index_size;
     ticks_status_e get_index_offset_status = ticks_get_index_offset(read_handle, &index_offset);
-    if (index_offset == 0 || get_index_offset_status != TICKS_OK)
+    if (get_index_offset_status == TICKS_OK)
         printf("├── Index Offset: %llu\n", (unsigned long long)index_offset);
     else
         print_error("ticks_get_index_offset", get_index_offset_status);
@@ -111,7 +112,7 @@ int main() {
         if (index_size == 0)
             printf("└── Index Size: %llu\n", (unsigned long long)index_size);
         else
-            printf("├── Index Size: %llu (%llu Entries)\n", (unsigned long long)index_size , (unsigned long long)(index_size / sizeof(ticks_index_entry_t)));
+            printf("├── Index Size: %llu (%u Entries)\n", (unsigned long long)index_size, read_handle->index.num_entries);
     else
         print_error("ticks_get_index_size", get_index_size_status);
 
@@ -122,8 +123,16 @@ int main() {
         printf("    ├── Size: %u\n", read_handle->index.entries[0].chunk_size);
         printf("    ├── Timestamp Size: %u\n", read_handle->index.entries[0].timestamp_size);
         printf("    ├── Price Size: %u\n", read_handle->index.entries[0].price_size);
-        printf("    └── Volume Size: %u\n", read_handle->index.entries[0].volume_size);
+        printf("    ├── Volume Size: %u\n", read_handle->index.entries[0].volume_size);
+        printf("    └── CRC32: 0x%08X\n", read_handle->index.entries[0].chunk_crc32);
     }
+
+    printf("\n--- Verifying Chunk Integrity ---\n");
+    ticks_status_e verify_status = ticks_verify(read_handle);
+    if (verify_status == TICKS_OK)
+        printf("All chunks passed CRC32 verification.\n");
+    else
+        print_error("ticks_verify", verify_status);
 
     ticks_status_e read_close_status = ticks_close(read_handle);
     if (read_close_status != TICKS_OK) {

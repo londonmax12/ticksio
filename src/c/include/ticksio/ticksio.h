@@ -73,6 +73,15 @@ ticks_status_e ticks_get_index_size(ticks_file_t* handle, uint64_t* out_size);
 ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries);
 
 /**
+ * @brief Verifies the integrity of every chunk by recomputing its CRC32 and
+ *        comparing it against the value stored in the index.
+ * @param handle The file stream handle (must be open for reading).
+ * @return TICKS_OK if all chunks are intact, TICKS_ERROR_CORRUPT_DATA on a
+ *         checksum mismatch, or an I/O error code.
+ */
+ticks_status_e ticks_verify(ticks_file_t* handle);
+
+/**
  * @brief Converts a ticks_status_e code to a human-readable string.
  * @param status The status code to convert.
  * @return A string representation of the status code.

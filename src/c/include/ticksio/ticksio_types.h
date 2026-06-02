@@ -45,6 +45,7 @@ enum {
     ENDIAN_BIG = 2
 };
 typedef struct {
+    uint16_t version;
     char ticker[TICKS_TICKER_SIZE];
     char currency[TICKS_CURRENCY_SIZE];
     asset_class_e asset_class;
@@ -58,6 +59,7 @@ typedef struct {
     uint64_t chunk_time_base;
     uint64_t chunk_offset;
     uint32_t chunk_size;
+    uint32_t chunk_crc32; // CRC32 (IEEE) of the chunk's on-disk bytes
     size_e timestamp_size;
     size_e price_size;
     size_e volume_size;
@@ -89,7 +91,9 @@ typedef enum {
     TICKS_ERROR_FILE_IO = -4,
     TICKS_ERROR_MEMORY_ALLOCATION = -5,
     TICKS_ERROR_INVALID_FORMAT = -6,
-    TICKS_ERROR_EMPTY_CHUNK = -7
+    TICKS_ERROR_EMPTY_CHUNK = -7,
+    TICKS_ERROR_UNSORTED_DATA = -8,
+    TICKS_ERROR_CORRUPT_DATA = -9
 } ticks_status_e;
 
 // Opaque ticks file handle type
