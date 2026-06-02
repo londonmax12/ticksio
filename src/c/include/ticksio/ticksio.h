@@ -99,6 +99,20 @@ const char* ticks_status_to_string(ticks_status_e status);
 ticks_status_e ticks_iterator_create(ticks_file_t* handle, time_t from, time_t to, ticks_iterator_t** out_iterator);
 
 /*
+* @brief Returns the next tick within the iterator's [from, to) range.
+*
+* Records are produced in ascending time order. Chunks whose time span falls
+* entirely outside the range are skipped using the index alone (no decode),
+* including the final chunk, which is bounded by its chunk_last_timestamp.
+*
+* @param iterator Pointer to the iterator.
+* @param out_record Pointer to store the next tick (timestamps in ms).
+* @return TICKS_OK if a record was produced, TICKS_EOF when the range is
+*         exhausted, or an error code on I/O / format failure.
+*/
+ticks_status_e ticks_iterator_next(ticks_iterator_t* iterator, trade_data_t* out_record);
+
+/*
 * @brief Destroys the iterator and frees associated resources
 * @param iterator Pointer to the iterator to destroy
 * @return Status code indicating success or failure (0 = OK)

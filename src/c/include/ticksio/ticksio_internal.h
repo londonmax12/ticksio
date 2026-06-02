@@ -35,9 +35,28 @@ struct ticks_file_t_internal {
 
 struct ticks_iterator_t_internal {
     ticks_file_t* file_handle;
-    time_t from;
-    time_t to;
-    uint32_t current_chunk;
-    uint32_t current_record_in_chunk;
+    time_t from;          // inclusive range start (seconds since epoch)
+    time_t to;            // exclusive range end (seconds since epoch)
+    uint64_t from_ms;     // `from`/`to` in milliseconds, to match stored tick timestamps
+    uint64_t to_ms;
+    uint32_t current_chunk;            // index of the loaded chunk (valid when chunk_loaded)
+    uint32_t current_record_in_chunk;  // next record to emit within the loaded chunk
+    int chunk_loaded;                  // whether the decode state below is populated
+
+    // Raw bytes and decode cursor for the currently loaded chunk. Records are
+    // reconstructed sequentially: cur_* hold the running absolute values of the
+    // record at current_record_in_chunk; the column pointers point into chunk_buf.
+    uint8_t* chunk_buf;
+    uint32_t chunk_buf_cap;
+    uint32_t chunk_nrec;
+    const uint8_t* ts_col;
+    const uint8_t* price_col;
+    const uint8_t* volume_col;
+    size_e ts_w;
+    size_e price_w;
+    size_e volume_w;
+    uint64_t cur_t;
+    uint64_t cur_p;
+    uint64_t cur_v;
 };
 #endif // TICKSIO_INTERNAL_H

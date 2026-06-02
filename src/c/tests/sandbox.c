@@ -100,7 +100,10 @@ int main() {
         printf("├── Country: %s\n", ticks_header.country);
         printf("├── Compression Type: %hu\n", ticks_header.compression_type);
         printf("├── Price Scale: %d (real = stored * 10^%d)\n", ticks_header.price_scale, ticks_header.price_scale);
-        printf("└── Volume Scale: %d\n", ticks_header.volume_scale);
+        printf("├── Volume Scale: %d\n", ticks_header.volume_scale);
+        printf("├── Record Count: %llu\n", (unsigned long long)ticks_header.record_count);
+        printf("├── Min Timestamp: %llu ms\n", (unsigned long long)ticks_header.min_timestamp);
+        printf("└── Max Timestamp: %llu ms\n", (unsigned long long)ticks_header.max_timestamp);
     } else {
         print_error("ticks_get_asset_class", get_header_status);
     }
@@ -180,6 +183,22 @@ int main() {
         return EXIT_FAILURE;
     }
     printf("Iterator created successfully for range %d-%d\n", from_year, to_year);
+
+    uint64_t iterated = 0;
+    trade_data_t rec;
+    ticks_status_e next_status;
+    while ((next_status = ticks_iterator_next(iterator, &rec)) == TICKS_OK)
+        iterated++;
+    if (next_status != TICKS_EOF) {
+        print_error("ticks_iterator_next", next_status);
+        ticks_iterator_destroy(iterator);
+        ticks_close(iter_handle);
+        return EXIT_FAILURE;
+    }
+    printf("Iterated %llu records in range %d-%d\n", (unsigned long long)iterated, from_year, to_year);
+
+    ticks_iterator_destroy(iterator);
+    ticks_close(iter_handle);
 
     return EXIT_SUCCESS;
 }

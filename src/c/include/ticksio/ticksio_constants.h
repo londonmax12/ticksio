@@ -10,7 +10,7 @@ extern "C" {
 // --- Header constants ---
 #define TICKS_MAGIC "TICK"
 #define TICKS_MAGIC_SIZE 4
-#define TICKS_VERSION 2
+#define TICKS_VERSION 3
 #define TICKS_TICKER_SIZE 8
 #define TICKS_CURRENCY_SIZE 3
 #define TICKS_COUNTRY_SIZE 2
@@ -31,10 +31,18 @@ extern "C" {
 //   22     2    compression_type   (uint16)
 //   24     1    price_scale        (int8, base-10 exponent: real = stored * 10^scale)
 //   25     1    volume_scale       (int8, base-10 exponent)
-//   26     6    reserved           (zero; room for forward-compatible fields)
-//   32     8    index_offset       (uint64)
-//   40     8    index_size         (uint64)
-//   48     ...  chunk data ...
+//   26     8    record_count       (uint64, total ticks in the file; 0 = empty)
+//   34     8    min_timestamp      (uint64, ms of the first tick; 0 if empty)
+//   42     8    max_timestamp      (uint64, ms of the last tick; 0 if empty)
+//   50     6    reserved           (zero; room for forward-compatible fields)
+//   56     8    index_offset       (uint64)
+//   64     8    index_size         (uint64)
+//   72     ...  chunk data ...
+//
+// record_count / min_timestamp / max_timestamp are a denormalized file-level
+// summary: they let a catalog answer "how many ticks and what time span" from
+// the fixed-size header alone, without seeking to and reading the index. They
+// are maintained by the library on write and ignored on input to ticks_new_file.
 #define TICKS_OFF_MAGIC         0
 #define TICKS_OFF_VERSION       4
 #define TICKS_OFF_ENDIANNESS    6
@@ -45,23 +53,29 @@ extern "C" {
 #define TICKS_OFF_COMPRESSION   22
 #define TICKS_OFF_PRICE_SCALE   24
 #define TICKS_OFF_VOLUME_SCALE  25
-#define TICKS_OFF_RESERVED      26
-#define TICKS_OFF_INDEX_OFFSET  32
-#define TICKS_OFF_INDEX_SIZE    40
-#define TICKS_HEADER_REGION_SIZE 48
+#define TICKS_OFF_RECORD_COUNT  26
+#define TICKS_OFF_MIN_TIMESTAMP 34
+#define TICKS_OFF_MAX_TIMESTAMP 42
+#define TICKS_OFF_RESERVED      50
+#define TICKS_OFF_INDEX_OFFSET  56
+#define TICKS_OFF_INDEX_SIZE    64
+#define TICKS_HEADER_REGION_SIZE 72
 
-// Each index entry on disk (little-endian, no padding). The three column-width
-// bytes record the *delta* widths of the chunk's columns and are redundant with
-// the chunk's own header (which is authoritative); they are kept here so the
-// index alone is enough for fast iteration and cross-checking.
-//   0  8 chunk_time_base (uint64)
-//   8  8 chunk_offset    (uint64)
-//   16 4 chunk_size      (uint32)
-//   20 4 chunk_crc32     (uint32)
-//   24 1 timestamp_size  (uint8)
-//   25 1 price_size      (uint8)
-//   26 1 volume_size     (uint8)
-#define TICKS_INDEX_ENTRY_DISK_SIZE 27
+// Each index entry on disk (little-endian, no padding). chunk_time_base and
+// chunk_last_timestamp bound the chunk's time span so a range query can prune
+// every chunk (including the last one) from the index alone, without decoding.
+// The three column-width bytes record the *delta* widths of the chunk's columns
+// and are redundant with the chunk's own header (which is authoritative); they
+// are kept here so the index alone is enough for fast iteration and cross-checking.
+//   0  8 chunk_time_base      (uint64)  ms of the first tick in the chunk
+//   8  8 chunk_last_timestamp (uint64)  ms of the last tick in the chunk
+//   16 8 chunk_offset         (uint64)
+//   24 4 chunk_size           (uint32)
+//   28 4 chunk_crc32          (uint32)
+//   32 1 timestamp_size       (uint8)
+//   33 1 price_size           (uint8)
+//   34 1 volume_size          (uint8)
+#define TICKS_INDEX_ENTRY_DISK_SIZE 35
 
 // Each chunk begins with a self-describing header (little-endian, no padding)
 // so a chunk can be decoded without consulting the index. Columns follow the

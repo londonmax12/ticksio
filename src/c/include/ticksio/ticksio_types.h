@@ -57,11 +57,19 @@ typedef struct {
     // stored in cents). Both default to 0 (stored values are the real values).
     int8_t price_scale;
     int8_t volume_scale;
+    // File-level summary, maintained by the library (ignored on input to
+    // ticks_new_file). Lets a catalog read just the header to learn how many
+    // ticks the file holds and the time span they cover, without touching the
+    // index. For an empty file all three are 0.
+    uint64_t record_count;  // total number of ticks across all chunks
+    uint64_t min_timestamp; // ms of the first tick (== first chunk's time base)
+    uint64_t max_timestamp; // ms of the last tick (== last chunk's last timestamp)
 } ticks_header_t;
 
 // --- Index structures ---
 typedef struct {
-    uint64_t chunk_time_base;
+    uint64_t chunk_time_base;      // ms of the first tick in the chunk
+    uint64_t chunk_last_timestamp; // ms of the last tick in the chunk
     uint64_t chunk_offset;
     uint32_t chunk_size;
     uint32_t chunk_crc32; // CRC32 (IEEE) of the chunk's on-disk bytes
@@ -79,9 +87,10 @@ typedef struct {
 // each column is stored absolutely in the *_base fields. The *_size fields are
 // therefore the per-delta widths, not the widths of the absolute values.
 typedef struct {
-    uint64_t time_base;   // absolute ms of the first tick in the chunk
-    uint64_t price_base;  // absolute price of the first tick
-    uint64_t volume_base; // absolute volume of the first tick
+    uint64_t time_base;      // absolute ms of the first tick in the chunk
+    uint64_t last_timestamp; // absolute ms of the last tick in the chunk (index only; not on the chunk header)
+    uint64_t price_base;     // absolute price of the first tick
+    uint64_t volume_base;    // absolute volume of the first tick
     uint32_t num_records;
     size_e timestamp_size; // width of each timestamp delta
     size_e price_size;     // width of each zig-zag price delta

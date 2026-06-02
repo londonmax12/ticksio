@@ -113,6 +113,11 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const trade_d
         chunk->num_records++;
     }
 
+    // Last tick's absolute timestamp. Stored in the index entry (not the chunk
+    // header) so range queries can bound every chunk's time span without
+    // decoding — including the final chunk, which has no following chunk base.
+    chunk->last_timestamp = entries[start + chunk->num_records - 1].ms_since_epoch;
+
     // Serialize the self-describing chunk header.
     uint8_t* const h = chunk->data;
     le_put_u32(h + 0, chunk->num_records);
@@ -173,6 +178,7 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
 
     const ticks_index_entry_t new_index_entry = {
         .chunk_time_base = chunk->time_base,
+        .chunk_last_timestamp = chunk->last_timestamp,
         .chunk_offset = chunk_write_pos,
         .chunk_size = chunk->data_size,
         .chunk_crc32 = ticks_crc32(chunk->data, chunk->data_size),

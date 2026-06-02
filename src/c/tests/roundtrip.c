@@ -74,6 +74,17 @@ int main(void) {
         fprintf(stderr, "FAIL: header mismatch (v=%u ps=%d vs=%d)\n", got.version, got.price_scale, got.volume_scale);
         return 1;
     }
+    // The file-level summary must reflect everything written, readable from the
+    // header alone (no index scan).
+    if (got.record_count != N ||
+        got.min_timestamp != in[0].ms_since_epoch ||
+        got.max_timestamp != in[N - 1].ms_since_epoch) {
+        fprintf(stderr, "FAIL: summary mismatch (count=%llu/%llu min=%llu/%llu max=%llu/%llu)\n",
+            (unsigned long long)got.record_count, (unsigned long long)N,
+            (unsigned long long)got.min_timestamp, (unsigned long long)in[0].ms_since_epoch,
+            (unsigned long long)got.max_timestamp, (unsigned long long)in[N - 1].ms_since_epoch);
+        return 1;
+    }
     if (ticks_verify(r) != TICKS_OK) { fprintf(stderr, "FAIL: CRC verify\n"); return 1; }
 
     // --- Independently decode every chunk from raw bytes and compare. ---
@@ -134,6 +145,47 @@ int main(void) {
            (unsigned long long)total_records, num_chunks);
     printf("On-disk chunk bytes: %llu  (naive 24B/rec: %.0f)  ratio: %.2fx smaller\n",
            (unsigned long long)on_disk_bytes, naive, naive / (double)on_disk_bytes);
+
+    // --- Exercise the range iterator and its index-only pruning. ---
+    // Start the window inside the *last* chunk so the first chunk must be pruned
+    // via its chunk_last_timestamp (not via a following chunk's base), and run
+    // the window past the final tick so the last chunk can't be skipped.
+    // The public range is in seconds; the iterator scales it to ms internally.
+    const time_t from_s = (time_t)(in[N - N / 4].ms_since_epoch / 1000);
+    const time_t to_s   = (time_t)(in[N - 1].ms_since_epoch / 1000) + 1;
+    const uint64_t sel_from_ms = (uint64_t)from_s * 1000ULL;
+    const uint64_t sel_to_ms   = (uint64_t)to_s   * 1000ULL;
+
+    uint64_t expected = 0, vi = 0;
+    while (vi < N && in[vi].ms_since_epoch < sel_from_ms) vi++;
+    for (uint64_t i = vi; i < N && in[i].ms_since_epoch < sel_to_ms; i++) expected++;
+
+    ticks_iterator_t* it = NULL;
+    if (ticks_iterator_create(r, from_s, to_s, &it) != TICKS_OK) {
+        fprintf(stderr, "FAIL: iterator_create\n"); return 1;
+    }
+    uint64_t iter_got = 0;
+    trade_data_t rec;
+    ticks_status_e ns;
+    while ((ns = ticks_iterator_next(it, &rec)) == TICKS_OK) {
+        if (vi >= N || rec.ms_since_epoch != in[vi].ms_since_epoch ||
+            rec.price != in[vi].price || rec.volume != in[vi].volume) {
+            fprintf(stderr, "FAIL: iterator record %llu mismatch\n", (unsigned long long)iter_got);
+            return 1;
+        }
+        vi++; iter_got++;
+    }
+    if (ns != TICKS_EOF) {
+        fprintf(stderr, "FAIL: iterator_next: %s\n", ticks_status_to_string(ns)); return 1;
+    }
+    if (iter_got != expected) {
+        fprintf(stderr, "FAIL: iterator count %llu != expected %llu\n",
+                (unsigned long long)iter_got, (unsigned long long)expected);
+        return 1;
+    }
+    ticks_iterator_destroy(it);
+    printf("PASS: iterator returned %llu records in [%lld, %lld)s; first chunk pruned via last_timestamp.\n",
+           (unsigned long long)iter_got, (long long)from_s, (long long)to_s);
 
     ticks_close(r);
     free(in);
