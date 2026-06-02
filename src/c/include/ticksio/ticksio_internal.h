@@ -44,19 +44,16 @@ struct ticks_iterator_t_internal {
     int chunk_loaded;                  // whether the decode state below is populated
 
     // Raw bytes and decode cursor for the currently loaded chunk. Records are
-    // reconstructed sequentially: cur_* hold the running absolute values of the
-    // record at current_record_in_chunk; the column pointers point into chunk_buf.
+    // reconstructed sequentially: cur[] holds the running absolute values of the
+    // record at current_record_in_chunk (cur[0] is the timestamp); the per-column
+    // pointers/widths/encodings are read from the self-describing chunk header.
     uint8_t* chunk_buf;
     uint32_t chunk_buf_cap;
     uint32_t chunk_nrec;
-    const uint8_t* ts_col;
-    const uint8_t* price_col;
-    const uint8_t* volume_col;
-    size_e ts_w;
-    size_e price_w;
-    size_e volume_w;
-    uint64_t cur_t;
-    uint64_t cur_p;
-    uint64_t cur_v;
+    uint8_t  chunk_ncols;
+    const uint8_t* cols[TICKS_MAX_COLUMNS]; // start of each column's delta region
+    size_e         widths[TICKS_MAX_COLUMNS];
+    col_encoding_e encs[TICKS_MAX_COLUMNS];
+    uint64_t       cur[TICKS_MAX_COLUMNS];  // running absolute value of each column
 };
 #endif // TICKSIO_INTERNAL_H

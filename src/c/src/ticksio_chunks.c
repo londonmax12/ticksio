@@ -47,11 +47,32 @@ static size_e max_size(size_e a, size_e b) {
     return a > b ? a : b;
 }
 
-static create_chunk_result create_chunk(uint64_t* const row_index, const trade_data_t* entries, uint64_t num_entries) {
+// Compute the delta for column j between two adjacent records, already encoded
+// to the unsigned value that gets packed on disk (raw for monotonic columns,
+// zig-zag for signed ones).
+static uint64_t column_delta(const uint64_t* cur, const uint64_t* prev, uint8_t j, col_encoding_e enc) {
+    if (enc == COL_ENC_DELTA_UNSIGNED)
+        return cur[j] - prev[j];
+    return zigzag_encode((int64_t)(cur[j] - prev[j]));
+}
+
+// Builds one chunk starting at *row_index. `values` is row-major: record i,
+// column j lives at values[i * schema->num_columns + j], and column 0 is the
+// timestamp. Each column is delta-encoded against the previous record, so its
+// width is governed by how much consecutive ticks *move*, not their magnitude.
+//
+// Pass 1: "Dry run" to determine the per-column delta widths and how many
+//         records fit in the chunk's MAX_CHUNK_SIZE budget.
+// Pass 2: "Serialization" — write the self-describing chunk header (a descriptor
+//         per column) followed by the column data regions in column order.
+static create_chunk_result create_chunk(uint64_t* const row_index, const uint64_t* values,
+                                        uint64_t num_entries, const ticks_schema_t* schema) {
     if (*row_index >= num_entries) {
         perror("ERROR: row_index out of bounds in create_chunk\n");
         return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_INVALID_ARGUMENTS};
     }
+
+    const uint8_t ncols = schema->num_columns;
 
     ticks_chunk_t* chunk = malloc(sizeof(ticks_chunk_t));
     if (chunk == NULL) {
@@ -66,85 +87,79 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const trade_d
         return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
     }
 
-    // Each column is delta-encoded against the previous record, so the chunk's
-    // column widths are governed by how much consecutive ticks *move*, not by
-    // their absolute magnitude. The first record is captured absolutely in the
-    // *_base fields below.
-    //
-    // Pass 1: "Dry run" to determine the per-column delta widths and how many
-    //         records fit in the chunk's MAX_CHUNK_SIZE budget.
-    // Pass 2: "Serialization" — write the self-describing chunk header followed
-    //         by the three delta columns in struct-of-arrays order.
-
     const uint64_t start = *row_index;
-    chunk->time_base = entries[start].ms_since_epoch;
-    chunk->price_base = entries[start].price;
-    chunk->volume_base = entries[start].volume;
-    chunk->num_records = 1; // the base record is always included
+    const uint64_t* const base_rec = values + start * ncols;
 
-    // A delta needs at least one byte, so widths start at the 1-byte minimum.
-    chunk->timestamp_size = SIZE_8BIT;
-    chunk->price_size = SIZE_8BIT;
-    chunk->volume_size = SIZE_8BIT;
+    chunk->num_columns = ncols;
+    chunk->num_records = 1; // the base record is always included
+    for (uint8_t j = 0; j < ncols; j++) {
+        chunk->bases[j] = base_rec[j];
+        chunk->widths[j] = SIZE_8BIT; // a delta needs at least one byte
+        chunk->encs[j] = schema->encodings[j];
+    }
+    chunk->time_base = chunk->bases[0];
+
+    const uint32_t header_size = TICKS_CHUNK_HEADER_SIZE(ncols);
 
     for (uint64_t i = start + 1; i < num_entries; i++) {
-        // Timestamps are non-decreasing, so their deltas are unsigned. Price and
-        // volume can move either way, so their deltas are zig-zag-encoded.
-        const uint64_t ts_delta = entries[i].ms_since_epoch - entries[i - 1].ms_since_epoch;
-        const uint64_t price_delta = zigzag_encode((int64_t)(entries[i].price - entries[i - 1].price));
-        const uint64_t volume_delta = zigzag_encode((int64_t)(entries[i].volume - entries[i - 1].volume));
+        const uint64_t* cur = values + i * ncols;
+        const uint64_t* prev = values + (i - 1) * ncols;
 
-        const size_e new_ts = max_size(chunk->timestamp_size, determine_min_size_uint64(ts_delta));
-        const size_e new_p = max_size(chunk->price_size, determine_min_size_uint64(price_delta));
-        const size_e new_v = max_size(chunk->volume_size, determine_min_size_uint64(volume_delta));
-
-        // Records start..i contribute (i - start) deltas to the three columns.
-        const uint64_t num_deltas = i - start;
-        const uint64_t potential_total_size =
-            TICKS_CHUNK_HEADER_DISK_SIZE + num_deltas * (uint64_t)(new_ts + new_p + new_v);
-
-        if (potential_total_size > MAX_CHUNK_SIZE) {
-            break; // This record won't fit, finalize chunk before it.
+        // Widen each column as needed to fit this record's deltas.
+        size_e new_widths[TICKS_MAX_COLUMNS];
+        uint64_t sum_widths = 0;
+        for (uint8_t j = 0; j < ncols; j++) {
+            const uint64_t delta = column_delta(cur, prev, j, chunk->encs[j]);
+            new_widths[j] = max_size(chunk->widths[j], determine_min_size_uint64(delta));
+            sum_widths += new_widths[j];
         }
 
-        chunk->timestamp_size = new_ts;
-        chunk->price_size = new_p;
-        chunk->volume_size = new_v;
+        // Records start..i contribute (i - start) deltas to every column.
+        const uint64_t num_deltas = i - start;
+        const uint64_t potential_total_size = header_size + num_deltas * sum_widths;
+        if (potential_total_size > MAX_CHUNK_SIZE)
+            break; // This record won't fit, finalize chunk before it.
+
+        for (uint8_t j = 0; j < ncols; j++)
+            chunk->widths[j] = new_widths[j];
         chunk->num_records++;
     }
 
-    // Last tick's absolute timestamp. Stored in the index entry (not the chunk
-    // header) so range queries can bound every chunk's time span without
-    // decoding — including the final chunk, which has no following chunk base.
-    chunk->last_timestamp = entries[start + chunk->num_records - 1].ms_since_epoch;
+    // Last tick's absolute timestamp (column 0). Stored in the index entry (not
+    // the chunk header) so range queries can bound every chunk's time span
+    // without decoding — including the final chunk, which has no following base.
+    chunk->last_timestamp = values[(start + chunk->num_records - 1) * ncols + 0];
 
-    // Serialize the self-describing chunk header.
+    // Serialize the self-describing chunk header: fixed prefix, then one
+    // descriptor (base + width + encoding) per column.
     uint8_t* const h = chunk->data;
     le_put_u32(h + 0, chunk->num_records);
-    le_put_u64(h + 4, chunk->time_base);
-    le_put_u64(h + 12, chunk->price_base);
-    le_put_u64(h + 20, chunk->volume_base);
-    h[28] = (uint8_t)chunk->timestamp_size;
-    h[29] = (uint8_t)chunk->price_size;
-    h[30] = (uint8_t)chunk->volume_size;
-
-    // Serialize the three delta columns (timestamps, then prices, then volumes).
-    const uint64_t num_deltas = chunk->num_records - 1;
-    uint8_t* ts_ptr = chunk->data + TICKS_CHUNK_HEADER_DISK_SIZE;
-    uint8_t* price_ptr = ts_ptr + num_deltas * (uint64_t)chunk->timestamp_size;
-    uint8_t* volume_ptr = price_ptr + num_deltas * (uint64_t)chunk->price_size;
-
-    for (uint64_t i = start + 1; i < start + chunk->num_records; i++) {
-        const uint64_t ts_delta = entries[i].ms_since_epoch - entries[i - 1].ms_since_epoch;
-        const uint64_t price_delta = zigzag_encode((int64_t)(entries[i].price - entries[i - 1].price));
-        const uint64_t volume_delta = zigzag_encode((int64_t)(entries[i].volume - entries[i - 1].volume));
-        write_data(&ts_ptr, ts_delta, chunk->timestamp_size);
-        write_data(&price_ptr, price_delta, chunk->price_size);
-        write_data(&volume_ptr, volume_delta, chunk->volume_size);
+    h[4] = ncols;
+    uint8_t* desc = h + TICKS_CHUNK_HEADER_BASE_SIZE;
+    for (uint8_t j = 0; j < ncols; j++) {
+        le_put_u64(desc + 0, chunk->bases[j]);
+        desc[8] = (uint8_t)chunk->widths[j];
+        desc[9] = (uint8_t)chunk->encs[j];
+        desc += TICKS_CHUNK_COL_DESC_SIZE;
     }
 
-    chunk->data_size = (uint32_t)(TICKS_CHUNK_HEADER_DISK_SIZE +
-        num_deltas * (uint64_t)(chunk->timestamp_size + chunk->price_size + chunk->volume_size));
+    // Serialize the column data regions in column order (all of column 0's
+    // deltas, then column 1's, …).
+    const uint64_t num_deltas = chunk->num_records - 1;
+    uint8_t* col_ptr[TICKS_MAX_COLUMNS];
+    uint8_t* p = chunk->data + header_size;
+    for (uint8_t j = 0; j < ncols; j++) {
+        col_ptr[j] = p;
+        p += num_deltas * (uint64_t)chunk->widths[j];
+    }
+    for (uint64_t i = start + 1; i < start + chunk->num_records; i++) {
+        const uint64_t* cur = values + i * ncols;
+        const uint64_t* prev = values + (i - 1) * ncols;
+        for (uint8_t j = 0; j < ncols; j++)
+            write_data(&col_ptr[j], column_delta(cur, prev, j, chunk->encs[j]), chunk->widths[j]);
+    }
+
+    chunk->data_size = (uint32_t)(p - chunk->data);
     *row_index = start + chunk->num_records; // Advance the main index
 
     return (create_chunk_result){.chunk = chunk, .status = TICKS_OK};
@@ -181,10 +196,7 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
         .chunk_last_timestamp = chunk->last_timestamp,
         .chunk_offset = chunk_write_pos,
         .chunk_size = chunk->data_size,
-        .chunk_crc32 = ticks_crc32(chunk->data, chunk->data_size),
-        .timestamp_size = chunk->timestamp_size,
-        .price_size = chunk->price_size,
-        .volume_size = chunk->volume_size
+        .chunk_crc32 = ticks_crc32(chunk->data, chunk->data_size)
     };
 
     // Grow the in-memory index array with amortized O(1) doubling rather than
@@ -225,12 +237,13 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
 }
 
 
-ticks_status_e create_chunks(ticks_file_t* handle, const trade_data_t* entries, uint64_t num_entries)
+ticks_status_e create_chunks(ticks_file_t* handle, const uint64_t* values, uint64_t num_entries,
+                             const ticks_schema_t* schema)
 {
     uint64_t row_index = 0;
 
     while (row_index < num_entries) {
-        create_chunk_result result = create_chunk(&row_index, entries, num_entries);
+        create_chunk_result result = create_chunk(&row_index, values, num_entries, schema);
         ticks_chunk_t* chunk = result.chunk;
         if (chunk == NULL || result.status != TICKS_OK) {
             if (result.status == TICKS_ERROR_EMPTY_CHUNK) {

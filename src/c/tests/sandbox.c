@@ -25,6 +25,7 @@ int main() {
     strcpy(new_header->country, "US");
     new_header->asset_class = 10;
     new_header->compression_type = 0;
+    new_header->schema_id = SCHEMA_TRADE;
     // The CSV reader scales decimal prices into integer cents, so the real price
     // is the stored integer * 10^-2. Volume is stored as-is.
     new_header->price_scale = -2;
@@ -99,6 +100,7 @@ int main() {
         printf("├── Currency: %s\n", ticks_header.currency);
         printf("├── Country: %s\n", ticks_header.country);
         printf("├── Compression Type: %hu\n", ticks_header.compression_type);
+        printf("├── Schema: %hu\n", ticks_header.schema_id);
         printf("├── Price Scale: %d (real = stored * 10^%d)\n", ticks_header.price_scale, ticks_header.price_scale);
         printf("├── Volume Scale: %d\n", ticks_header.volume_scale);
         printf("├── Record Count: %llu\n", (unsigned long long)ticks_header.record_count);
@@ -130,9 +132,7 @@ int main() {
         printf("    ├── Time Base: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_time_base);
         printf("    ├── Offset: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_offset);
         printf("    ├── Size: %u\n", read_handle->index.entries[0].chunk_size);
-        printf("    ├── Timestamp Size: %u\n", read_handle->index.entries[0].timestamp_size);
-        printf("    ├── Price Size: %u\n", read_handle->index.entries[0].price_size);
-        printf("    ├── Volume Size: %u\n", read_handle->index.entries[0].volume_size);
+        printf("    ├── Last Timestamp: %llu\n", (unsigned long long)read_handle->index.entries[0].chunk_last_timestamp);
         printf("    └── CRC32: 0x%08X\n", read_handle->index.entries[0].chunk_crc32);
     }
 

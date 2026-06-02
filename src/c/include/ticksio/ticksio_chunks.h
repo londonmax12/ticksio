@@ -11,12 +11,15 @@ extern "C" {
 #include "ticksio/ticksio_helpers.h"
 
 /*
-* @brief Add trade data as chunks in file
-* @param row_index Pointer to the current index in entries array
-* @param entries Array of trade_data_t entries
-* @param num_entries Total number of entries in the array
+* @brief Encode records into chunks and append them to the file.
+* @param handle The ticks file handle.
+* @param values Row-major record values: record i, column j at values[i*ncols+j]
+*               (ncols == schema->num_columns; column 0 is the timestamp in ms).
+* @param num_entries Total number of records in `values`.
+* @param schema The record schema (column count + per-column encodings).
 * @return Error code (OK = 0)
 */
-ticks_status_e create_chunks(ticks_file_t* handle, const trade_data_t* entries, uint64_t num_entries);
+ticks_status_e create_chunks(ticks_file_t* handle, const uint64_t* values, uint64_t num_entries,
+                             const ticks_schema_t* schema);
 
 #endif // TICKSIO_CHUNKS_H

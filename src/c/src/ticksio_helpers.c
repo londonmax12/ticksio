@@ -95,6 +95,7 @@ void serialize_header(uint8_t* buf, const ticks_header_t* header,
     le_put_u16(buf + TICKS_OFF_COMPRESSION, header->compression_type);
     buf[TICKS_OFF_PRICE_SCALE] = (uint8_t)header->price_scale;
     buf[TICKS_OFF_VOLUME_SCALE] = (uint8_t)header->volume_scale;
+    le_put_u16(buf + TICKS_OFF_SCHEMA_ID, header->schema_id);
     // File-level summary (0/0/0 for an empty file).
     le_put_u64(buf + TICKS_OFF_RECORD_COUNT, header->record_count);
     le_put_u64(buf + TICKS_OFF_MIN_TIMESTAMP, header->min_timestamp);
@@ -115,6 +116,7 @@ void deserialize_header(const uint8_t* buf, ticks_header_t* header,
     header->compression_type = le_get_u16(buf + TICKS_OFF_COMPRESSION);
     header->price_scale = (int8_t)buf[TICKS_OFF_PRICE_SCALE];
     header->volume_scale = (int8_t)buf[TICKS_OFF_VOLUME_SCALE];
+    header->schema_id = le_get_u16(buf + TICKS_OFF_SCHEMA_ID);
     header->record_count = le_get_u64(buf + TICKS_OFF_RECORD_COUNT);
     header->min_timestamp = le_get_u64(buf + TICKS_OFF_MIN_TIMESTAMP);
     header->max_timestamp = le_get_u64(buf + TICKS_OFF_MAX_TIMESTAMP);
@@ -129,9 +131,6 @@ void serialize_index_entry(uint8_t* buf, const ticks_index_entry_t* entry) {
     le_put_u64(buf + 16, entry->chunk_offset);
     le_put_u32(buf + 24, entry->chunk_size);
     le_put_u32(buf + 28, entry->chunk_crc32);
-    buf[32] = (uint8_t)entry->timestamp_size;
-    buf[33] = (uint8_t)entry->price_size;
-    buf[34] = (uint8_t)entry->volume_size;
 }
 
 void deserialize_index_entry(const uint8_t* buf, ticks_index_entry_t* entry) {
@@ -140,7 +139,4 @@ void deserialize_index_entry(const uint8_t* buf, ticks_index_entry_t* entry) {
     entry->chunk_offset = le_get_u64(buf + 16);
     entry->chunk_size = le_get_u32(buf + 24);
     entry->chunk_crc32 = le_get_u32(buf + 28);
-    entry->timestamp_size = (size_e)buf[32];
-    entry->price_size = (size_e)buf[33];
-    entry->volume_size = (size_e)buf[34];
 }

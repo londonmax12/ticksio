@@ -1,5 +1,5 @@
 # File Type Specification — `.ticks`
-- **Version:** `3`
+- **Version:** `4`
 - **Author:** London Ball (@londonmax12 on Github)
 - **Last Updated:** 2026-06-02
 
@@ -8,6 +8,18 @@
 ## 1. Overview
 The `.ticks` file format provides an efficient storage solution for tick-level
 financial data, optimized for both compression and sequential access.
+
+A file stores a single **record schema**, identified by `schema_id` in the
+header. Each schema fixes the number and meaning of a record's columns; column 0
+is always the timestamp (epoch milliseconds). Two schemas are defined today:
+
+| `schema_id` | Name | Columns |
+|-------------|------|---------|
+| 0 | `trade` | timestamp, price, volume |
+| 1 | `quote` | timestamp, bid, ask, bid_size, ask_size |
+
+The on-disk chunk encoding is generic over the column set, so adding a schema is
+a registry change rather than a new format. See §2.4.
 
 All multi-byte integers are stored **little-endian**, at **fixed byte offsets**.
 Records are serialized field-by-field — C structs are never written to disk
@@ -26,19 +38,20 @@ size of the index so a reader can locate it without scanning.
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
 | 0  | `magic_number` | char[4] | `"TICK"` (`0x54 0x49 0x43 0x4B`) |
-| 4  | `version` | uint16 | Format version (currently `3`) |
+| 4  | `version` | uint16 | Format version (currently `4`) |
 | 6  | `endianness` | uint8 | On-disk byte order: 0 = undefined, 1 = little, 2 = big (always written as `1`) |
 | 7  | `ticker` | char[8] | Instrument code (e.g., `GBPJPY` or `AAPL`) |
 | 15 | `currency` | char[3] | ISO currency code (e.g., `USD`) |
 | 18 | `country` | char[2] | ISO country code (e.g., `AU`) |
 | 20 | `asset_class` | uint16 | Enum for asset class |
 | 22 | `compression_type` | uint16 | Enum for compression algorithm |
-| 24 | `price_scale` | int8 | Base-10 exponent: real price = stored `price` × 10^`price_scale` (e.g. `-2` ⇒ prices are in cents) |
-| 25 | `volume_scale` | int8 | Base-10 exponent applied to `volume` the same way |
+| 24 | `price_scale` | int8 | Base-10 exponent for price-like columns (price, bid, ask): real = stored × 10^`price_scale` (e.g. `-2` ⇒ cents) |
+| 25 | `volume_scale` | int8 | Base-10 exponent for size-like columns (volume, bid_size, ask_size) |
 | 26 | `record_count` | uint64 | Total number of ticks across all chunks (`0` if the file is empty) |
 | 34 | `min_timestamp` | uint64 | Epoch ms of the first tick in the file (`0` if empty) |
 | 42 | `max_timestamp` | uint64 | Epoch ms of the last tick in the file (`0` if empty) |
-| 50 | `reserved` | byte[6] | Reserved for forward-compatible fields; written as zero |
+| 50 | `schema_id` | uint16 | Record schema for the file (`0` = trade, `1` = quote); see §1 and §2.4 |
+| 52 | `reserved` | byte[4] | Reserved for forward-compatible fields; written as zero |
 | 56 | `index_offset` | uint64 | Byte offset to the index section |
 | 64 | `index_size` | uint64 | Byte size of the index section |
 
@@ -60,54 +73,62 @@ sentinel distinguishing "empty" from "starts at epoch 0".
 ---
 
 ### 2.2 Chunks (up to 16 MB per chunk)
-Chunk data begins at offset 48 (immediately after the header region). Each chunk
+Chunk data begins at offset 72 (immediately after the header region). Each chunk
 is **self-describing** (it starts with its own header) and **columnar**: rather
-than interleaving fields row-by-row, it stores all timestamps, then all prices,
-then all volumes. Within a chunk the columns are **delta-encoded** against the
-previous record, so each column's width is governed by how much consecutive
-ticks *move*, not by their absolute magnitude.
+than interleaving fields row-by-row, it stores all of column 0's values, then
+all of column 1's, and so on. Within a chunk the columns are **delta-encoded**
+against the previous record, so each column's width is governed by how much
+consecutive ticks *move*, not by their absolute magnitude.
 
-#### 2.2.1 Chunk header (31 bytes)
+The chunk header is **generic over the column set**: it records how many columns
+the chunk has and, per column, the absolute first value, the delta width, and
+the delta encoding. A decoder therefore needs neither the index nor the schema
+registry — the chunk bytes fully describe themselves.
+
+#### 2.2.1 Chunk header (variable length)
+A fixed 5-byte prefix, then one 10-byte descriptor per column
+(`header_size = 5 + 10 × num_columns`):
+
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
-| 0  | `num_records` | uint32 | Number of records (ticks) in the chunk |
-| 4  | `ts_base` | uint64 | Absolute timestamp (ms) of the first tick (equals the index entry's `chunk_time_base`) |
-| 12 | `price_base` | uint64 | Absolute price of the first tick |
-| 20 | `volume_base` | uint64 | Absolute volume of the first tick |
-| 28 | `ts_delta_size` | uint8 | Width of each timestamp delta: 1, 2, 4, or 8 bytes |
-| 29 | `price_delta_size` | uint8 | Width of each price delta |
-| 30 | `volume_delta_size` | uint8 | Width of each volume delta |
+| 0 | `num_records` | uint32 | Number of records (ticks) in the chunk |
+| 4 | `num_columns` | uint8 | Number of columns (matches the file's schema) |
+
+then, for each column `j` (starting at offset 5, stride 10):
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| +0 | `base` | uint64 | Absolute value of the column's first record |
+| +8 | `width` | uint8 | Width of each delta in this column: 1, 2, 4, or 8 bytes |
+| +9 | `enc` | uint8 | Delta encoding: `0` = unsigned, `1` = zig-zag signed |
+
+Column 0 is always the timestamp (`enc = 0`, unsigned); all other columns use
+zig-zag signed deltas (`enc = 1`).
 
 #### 2.2.2 Columns
-Immediately after the chunk header come three contiguous columns, each holding
-`num_records − 1` deltas (the first record is the `*_base` value in the header):
+Immediately after the chunk header come `num_columns` contiguous column regions,
+in column order. Column `j` holds `num_records − 1` deltas of `width[j]` bytes
+each (the first record's value is the descriptor's `base`):
 
-1. **Timestamps** — `num_records − 1` values of `ts_delta_size` bytes. Each is
-   the unsigned millisecond gap from the previous tick (ticks are non-decreasing
-   in time, so these are never negative).
-2. **Prices** — `num_records − 1` values of `price_delta_size` bytes. Each is the
-   signed change from the previous price, **zig-zag-encoded** to an unsigned
-   integer (`0 → 0, −1 → 1, 1 → 2, −2 → 3, …`).
-3. **Volumes** — `num_records − 1` values of `volume_delta_size` bytes, signed
-   change from the previous volume, zig-zag-encoded.
+- **Unsigned columns** (`enc = 0`, the timestamp): each delta is the unsigned
+  gap from the previous record. Timestamps are non-decreasing, so never negative.
+- **Zig-zag columns** (`enc = 1`, every other column): each delta is the signed
+  change from the previous record, **zig-zag-encoded** to an unsigned integer
+  (`0 → 0, −1 → 1, 1 → 2, −2 → 3, …`).
 
-To reconstruct record `i` (`i ≥ 1`): `value[i] = value[i−1] + delta[i−1]`
-(un-zig-zag the price/volume deltas first); `value[0]` is the `*_base` field.
+To reconstruct record `i` (`i ≥ 1`) for column `j`:
+`value[i] = value[i−1] + delta[i−1]` (un-zig-zag first if `enc = 1`);
+`value[0]` is the descriptor's `base`.
 
 A single-record chunk (`num_records == 1`) carries no deltas and is just the
-31-byte header.
-
-The widths are recorded in both the chunk header (authoritative) and the index
-entry (a redundant accelerator). Because each chunk is self-describing, the
-index can be rebuilt by scanning chunk headers, and a chunk decoded without the
-index at all.
+header.
 
 ---
 
-### 2.3 Index (35 bytes per entry)
+### 2.3 Index (32 bytes per entry)
 The index is a packed array of fixed-size entries, one per chunk, located at
 `index_offset` and spanning `index_size` bytes
-(`index_size = entry_count × 35`).
+(`index_size = entry_count × 32`).
 
 | Offset | Field | Type | Description |
 |--------|-------|------|-------------|
@@ -116,11 +137,11 @@ The index is a packed array of fixed-size entries, one per chunk, located at
 | 16 | `chunk_offset` | uint64 | File offset where the chunk starts |
 | 24 | `chunk_size` | uint32 | Byte size of the chunk on disk (header + columns) |
 | 28 | `chunk_crc32` | uint32 | CRC32 (IEEE 802.3) of the chunk's on-disk bytes |
-| 32 | `timestamp_size` | uint8 | Timestamp delta width: 1, 2, 4, or 8 bytes |
-| 33 | `price_size` | uint8 | Price delta width: 1, 2, 4, or 8 bytes |
-| 34 | `volume_size` | uint8 | Volume delta width: 1, 2, 4, or 8 bytes |
 
-The three width bytes mirror the chunk header's `*_delta_size` fields.
+The index is a pure accelerator: per-column widths are **not** duplicated here
+(they live in the self-describing chunk header, which is authoritative), so an
+index entry is fixed-size regardless of the schema's column count. Because each
+chunk is self-describing, the index can be rebuilt by scanning chunk headers.
 
 `chunk_time_base` and `chunk_last_timestamp` together bound each chunk's time
 span. Because chunks are stored in non-decreasing time order, a range query can
@@ -132,9 +153,28 @@ be pruned too, since it has no successor.
 
 ---
 
+### 2.4 Schemas
+A file's `schema_id` (header offset 50) selects a fixed column layout. Column 0
+is always the timestamp (epoch ms, unsigned-delta); the remaining columns are
+signed values (zig-zag delta).
+
+| `schema_id` | Name | Columns (in order) |
+|-------------|------|--------------------|
+| 0 | `trade` | timestamp, price, volume |
+| 1 | `quote` | timestamp, bid, ask, bid_size, ask_size |
+
+The chunk encoding (§2.2) is generic over the column count and per-column
+encoding, so a new schema is added by registering a new id and its column list —
+the on-disk chunk format does not change. A reader that does not recognize a
+file's `schema_id` can still decode the raw columns (the chunk headers are
+self-describing) but cannot attach column meaning. Writers and the typed readers
+reject operations whose schema does not match the file's (`SCHEMA_MISMATCH`).
+
+---
+
 ## 3. Integrity
 Each index entry stores a `chunk_crc32` computed over the chunk's on-disk bytes
-(its self-describing header plus the three columns). Readers can recompute and
+(its self-describing header plus all of its columns). Readers can recompute and
 compare it to detect corruption (`ticks_verify`). The same pass also recomputes
 the file-level summary — `record_count` from the summed chunk `num_records`, and
 `min_timestamp` / `max_timestamp` from the index extremes — and fails with a
@@ -155,6 +195,7 @@ algorithm (`0 = none`, `1 = ZSTD`, `2 = LZ4`).
 ## 5. Version History
 | Version | Date | Changes |
 |----------|------|----------|
+| 4 | 2026-06-02 | Schema-aware, generic columnar chunks. Added `schema_id` to the header (carved from reserved; region stays 72 bytes) selecting the record layout (`trade` = 3 columns, `quote` = 5 columns). The chunk header is now variable-length and self-describing per column (count + per-column base/width/encoding), so the format is generic over the column set. Dropped the per-column width bytes from each index entry (now authoritative in the chunk header), shrinking the entry 35 → 32 bytes. Added typed `ticks_add_quotes` / `ticks_iterator_next_quote` and a `SCHEMA_MISMATCH` status. |
 | 3 | 2026-06-02 | Added a denormalized file-level summary to the header — `record_count`, `min_timestamp`, `max_timestamp` — so a catalog can answer "how many ticks / what time span" from the header alone without reading the index (header region 48 → 72 bytes). All three are `0` for an empty file. `ticks_verify` now cross-checks the summary against the index and chunk headers. |
 | 2 | 2026-06-02 | Columnar (struct-of-arrays) chunk layout; delta encoding of every column (timestamps unsigned, price/volume zig-zag signed); self-describing per-chunk header (`num_records`, bases, delta widths); added `price_scale`/`volume_scale` and 6 reserved header bytes (header region 40 → 48 bytes); added `chunk_last_timestamp` to each index entry for full range pruning (index entry 27 → 35 bytes). |
 | 1 | 2026-06-02 | Explicit little-endian on-disk layout; added `version` and per-chunk `chunk_crc32`; documented fixed offsets. |

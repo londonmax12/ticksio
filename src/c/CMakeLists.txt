@@ -10,6 +10,7 @@ add_library(ticksio STATIC
     src/ticksio_helpers.c
     src/ticksio_chunks.c
     src/ticksio_index.c
+    src/ticksio_schema.c
 )
 
 target_include_directories(ticksio PUBLIC include)

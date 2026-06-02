@@ -64,13 +64,26 @@ ticks_status_e ticks_get_index_offset(ticks_file_t* handle, uint64_t* out_offset
 ticks_status_e ticks_get_index_size(ticks_file_t* handle, uint64_t* out_size);
 
 /**
- * @brief Adds trade data entries to the ticks file, creating chunks as needed.
+ * @brief Adds trade ticks to the file, creating chunks as needed.
+ *        The file must have been created with schema_id == SCHEMA_TRADE.
  * @param handle The file stream handle.
  * @param data Pointer to the array of trade_data_t entries to add.
  * @param num_entries Number of entries in the data array.
- * @return Status code indicating success or failure (0 = OK).
+ * @return Status code (0 = OK; TICKS_ERROR_SCHEMA_MISMATCH if the file is not a
+ *         trade file; TICKS_ERROR_UNSORTED_DATA if timestamps decrease).
  */
 ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries);
+
+/**
+ * @brief Adds quote (BBO) ticks to the file, creating chunks as needed.
+ *        The file must have been created with schema_id == SCHEMA_QUOTE.
+ * @param handle The file stream handle.
+ * @param data Pointer to the array of quote_data_t entries to add.
+ * @param num_entries Number of entries in the data array.
+ * @return Status code (0 = OK; TICKS_ERROR_SCHEMA_MISMATCH if the file is not a
+ *         quote file; TICKS_ERROR_UNSORTED_DATA if timestamps decrease).
+ */
+ticks_status_e ticks_add_quotes(ticks_file_t* handle, quote_data_t* data, uint64_t num_entries);
 
 /**
  * @brief Verifies the integrity of every chunk by recomputing its CRC32 and
@@ -108,9 +121,20 @@ ticks_status_e ticks_iterator_create(ticks_file_t* handle, time_t from, time_t t
 * @param iterator Pointer to the iterator.
 * @param out_record Pointer to store the next tick (timestamps in ms).
 * @return TICKS_OK if a record was produced, TICKS_EOF when the range is
-*         exhausted, or an error code on I/O / format failure.
+*         exhausted, TICKS_ERROR_SCHEMA_MISMATCH if the file is not a trade
+*         file, or an error code on I/O / format failure.
 */
 ticks_status_e ticks_iterator_next(ticks_iterator_t* iterator, trade_data_t* out_record);
+
+/*
+* @brief Returns the next quote tick within the iterator's [from, to) range.
+*        The file must have schema_id == SCHEMA_QUOTE. Same semantics and chunk
+*        pruning as ticks_iterator_next.
+* @param iterator Pointer to the iterator.
+* @param out_record Pointer to store the next quote (timestamps in ms).
+* @return TICKS_OK, TICKS_EOF, TICKS_ERROR_SCHEMA_MISMATCH, or an error code.
+*/
+ticks_status_e ticks_iterator_next_quote(ticks_iterator_t* iterator, quote_data_t* out_record);
 
 /*
 * @brief Destroys the iterator and frees associated resources

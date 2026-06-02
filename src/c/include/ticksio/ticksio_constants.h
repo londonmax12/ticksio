@@ -10,7 +10,7 @@ extern "C" {
 // --- Header constants ---
 #define TICKS_MAGIC "TICK"
 #define TICKS_MAGIC_SIZE 4
-#define TICKS_VERSION 3
+#define TICKS_VERSION 4
 #define TICKS_TICKER_SIZE 8
 #define TICKS_CURRENCY_SIZE 3
 #define TICKS_COUNTRY_SIZE 2
@@ -34,7 +34,8 @@ extern "C" {
 //   26     8    record_count       (uint64, total ticks in the file; 0 = empty)
 //   34     8    min_timestamp      (uint64, ms of the first tick; 0 if empty)
 //   42     8    max_timestamp      (uint64, ms of the last tick; 0 if empty)
-//   50     6    reserved           (zero; room for forward-compatible fields)
+//   50     2    schema_id          (uint16, record schema: 0=trade, 1=quote)
+//   52     4    reserved           (zero; room for forward-compatible fields)
 //   56     8    index_offset       (uint64)
 //   64     8    index_size         (uint64)
 //   72     ...  chunk data ...
@@ -56,7 +57,8 @@ extern "C" {
 #define TICKS_OFF_RECORD_COUNT  26
 #define TICKS_OFF_MIN_TIMESTAMP 34
 #define TICKS_OFF_MAX_TIMESTAMP 42
-#define TICKS_OFF_RESERVED      50
+#define TICKS_OFF_SCHEMA_ID     50
+#define TICKS_OFF_RESERVED      52
 #define TICKS_OFF_INDEX_OFFSET  56
 #define TICKS_OFF_INDEX_SIZE    64
 #define TICKS_HEADER_REGION_SIZE 72
@@ -64,33 +66,36 @@ extern "C" {
 // Each index entry on disk (little-endian, no padding). chunk_time_base and
 // chunk_last_timestamp bound the chunk's time span so a range query can prune
 // every chunk (including the last one) from the index alone, without decoding.
-// The three column-width bytes record the *delta* widths of the chunk's columns
-// and are redundant with the chunk's own header (which is authoritative); they
-// are kept here so the index alone is enough for fast iteration and cross-checking.
+// Per-column widths are NOT stored here — they live in the self-describing
+// chunk header (authoritative), which keeps this entry fixed-size for any schema.
 //   0  8 chunk_time_base      (uint64)  ms of the first tick in the chunk
 //   8  8 chunk_last_timestamp (uint64)  ms of the last tick in the chunk
 //   16 8 chunk_offset         (uint64)
 //   24 4 chunk_size           (uint32)
 //   28 4 chunk_crc32          (uint32)
-//   32 1 timestamp_size       (uint8)
-//   33 1 price_size           (uint8)
-//   34 1 volume_size          (uint8)
-#define TICKS_INDEX_ENTRY_DISK_SIZE 35
+#define TICKS_INDEX_ENTRY_DISK_SIZE 32
 
 // Each chunk begins with a self-describing header (little-endian, no padding)
-// so a chunk can be decoded without consulting the index. Columns follow the
-// header in struct-of-arrays order: all timestamp deltas, then all price
-// deltas, then all volume deltas. The first record of each column is stored
-// absolutely in the *_base fields; subsequent records are deltas from the
-// previous record (timestamps unsigned; price/volume zig-zag-encoded signed).
-//   0  4 num_records       (uint32)
-//   4  8 ts_base           (uint64)  absolute ms of first tick (== chunk_time_base)
-//   12 8 price_base        (uint64)  absolute price of first tick
-//   20 8 volume_base       (uint64)  absolute volume of first tick
-//   28 1 ts_delta_size     (uint8)   width of each timestamp delta (1/2/4/8)
-//   29 1 price_delta_size  (uint8)   width of each zig-zag price delta
-//   30 1 volume_delta_size (uint8)   width of each zig-zag volume delta
-#define TICKS_CHUNK_HEADER_DISK_SIZE 31
+// so a chunk can be decoded without consulting the index or the schema registry.
+// The header is variable-length: a fixed prefix, then one descriptor per column,
+// then the column data regions in column order (all of column 0's deltas, then
+// all of column 1's, …). The first record of each column is stored absolutely
+// in its descriptor's `base`; subsequent records are deltas of `width` bytes,
+// encoded per `enc` (unsigned for the timestamp column, zig-zag for the rest).
+//
+//   prefix (TICKS_CHUNK_HEADER_BASE_SIZE bytes):
+//     0  4 num_records  (uint32)
+//     4  1 num_columns  (uint8)
+//   then num_columns descriptors (TICKS_CHUNK_COL_DESC_SIZE bytes each):
+//     +0 8 base   (uint64)  absolute value of the column's first record
+//     +8 1 width  (uint8)   per-record delta width (1/2/4/8)
+//     +9 1 enc    (uint8)   col_encoding_e
+//   then the column data regions: column j is (num_records - 1) * width[j] bytes.
+#define TICKS_CHUNK_HEADER_BASE_SIZE 5
+#define TICKS_CHUNK_COL_DESC_SIZE 10
+// Total chunk-header size for a record with `ncols` columns.
+#define TICKS_CHUNK_HEADER_SIZE(ncols) \
+    ((uint32_t)TICKS_CHUNK_HEADER_BASE_SIZE + (uint32_t)(ncols) * (uint32_t)TICKS_CHUNK_COL_DESC_SIZE)
 
 // --- Chunking constants ---
 #define MAX_CHUNK_SIZE 16777216 // 16 MB

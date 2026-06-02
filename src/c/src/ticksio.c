@@ -4,8 +4,16 @@
 #include "ticksio/ticksio_chunks.h"
 #include "ticksio/ticksio_index.h"
 #include "ticksio/ticksio_helpers.h"
+#include "ticksio/ticksio_schema.h"
 #include "ticksio/ticksio_constants.h"
 #include "ticksio/ticksio_platform.h"
+
+// The typed record structs are passed to the generic column codec as
+// `(const uint64_t*)` with a stride of (number of columns). That is only valid
+// if each struct is a tightly packed run of uint64 fields — assert it at compile
+// time (negative array size fails the build if the layout ever changes).
+typedef char ticks_trade_layout_check[(sizeof(trade_data_t) == 3 * sizeof(uint64_t)) ? 1 : -1];
+typedef char ticks_quote_layout_check[(sizeof(quote_data_t) == 5 * sizeof(uint64_t)) ? 1 : -1];
 
 // Helper function to write the magic + header region using explicit
 // little-endian serialization (no struct/padding written to disk).
@@ -103,7 +111,11 @@ static ticks_status_e read_index_table(FILE *file, struct ticks_file_t_internal*
 
 // --- API Implementation ---
 ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, ticks_file_t** out_handle) {
-    if (filename == NULL || header == NULL) 
+    if (filename == NULL || header == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    // The schema is fixed for the life of the file and must be one we recognize.
+    if (ticks_schema_lookup(header->schema_id) == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
     // Allocate memory for the internal handle structure and zero memory
@@ -133,6 +145,7 @@ ticks_status_e ticks_new_file(const char* filename, ticks_header_t* header, tick
     strncpy(handle->header.currency, header->currency, TICKS_CURRENCY_SIZE);
     strncpy(handle->header.country, header->country, TICKS_COUNTRY_SIZE);
     handle->header.compression_type = header->compression_type;
+    handle->header.schema_id = header->schema_id;
     handle->header.price_scale = header->price_scale;
     handle->header.volume_scale = header->volume_scale;
 
@@ -280,44 +293,64 @@ ticks_status_e ticks_get_index_size(ticks_file_t *handle, uint64_t *out_size) {
     return TICKS_OK;
 }
 
-ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries) {
-    if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL)
-        return TICKS_ERROR_INVALID_ARGUMENTS;
+// Generic add path shared by every schema. `values` is row-major: record i,
+// column j at values[i*ncols + j], with column 0 the timestamp in ms.
+static ticks_status_e add_records(ticks_file_t* handle, const uint64_t* values,
+                                  uint64_t num_records, const ticks_schema_t* schema) {
+    const uint8_t ncols = schema->num_columns;
 
-    // Timestamps are delta-encoded against the previous tick as unsigned values,
-    // so the data must be non-decreasing in time. Validate the batch (and its
-    // continuity with previously written data) before writing anything.
+    // Column 0 (timestamp) is delta-encoded as unsigned, so it must be
+    // non-decreasing. Validate the batch (and its continuity with previously
+    // written data) before writing anything.
     uint64_t prev = handle->has_data ? handle->last_timestamp : 0;
-    for (uint64_t i = 0; i < num_entries; i++) {
-        if ((handle->has_data || i > 0) && data[i].ms_since_epoch < prev)
+    for (uint64_t i = 0; i < num_records; i++) {
+        const uint64_t ts = values[i * ncols];
+        if ((handle->has_data || i > 0) && ts < prev)
             return TICKS_ERROR_UNSORTED_DATA;
-        prev = data[i].ms_since_epoch;
+        prev = ts;
     }
 
-    // Create chunks from the provided data
-    ticks_status_e create_chunks_result = create_chunks(handle, data, num_entries);
-    if (create_chunks_result != TICKS_OK)
-        return create_chunks_result;
-  
-    ticks_status_e create_index_result = create_index(handle);
-    if (create_index_result != TICKS_OK)
-        return create_index_result;
+    ticks_status_e r = create_chunks(handle, values, num_records, schema);
+    if (r != TICKS_OK)
+        return r;
+
+    r = create_index(handle);
+    if (r != TICKS_OK)
+        return r;
 
     // Update the file-level summary. min_timestamp is fixed by the very first
     // tick ever written; max_timestamp and record_count grow with each batch.
+    const uint64_t last_ts = values[(num_records - 1) * ncols];
     if (!handle->has_data)
-        handle->header.min_timestamp = data[0].ms_since_epoch;
-    handle->header.max_timestamp = data[num_entries - 1].ms_since_epoch;
-    handle->header.record_count += num_entries;
-    ticks_status_e summary_result = write_summary(handle);
-    if (summary_result != TICKS_OK)
-        return summary_result;
+        handle->header.min_timestamp = values[0];
+    handle->header.max_timestamp = last_ts;
+    handle->header.record_count += num_records;
+    r = write_summary(handle);
+    if (r != TICKS_OK)
+        return r;
 
     // Record the high-water timestamp so subsequent calls stay ordered.
-    handle->last_timestamp = data[num_entries - 1].ms_since_epoch;
+    handle->last_timestamp = last_ts;
     handle->has_data = 1;
 
     return TICKS_OK;
+}
+
+ticks_status_e ticks_add_data(ticks_file_t* handle, trade_data_t* data, uint64_t num_entries) {
+    if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+    if (handle->header.schema_id != SCHEMA_TRADE)
+        return TICKS_ERROR_SCHEMA_MISMATCH;
+    // trade_data_t is a flat run of uint64 (asserted at top of file).
+    return add_records(handle, (const uint64_t*)data, num_entries, ticks_schema_lookup(SCHEMA_TRADE));
+}
+
+ticks_status_e ticks_add_quotes(ticks_file_t* handle, quote_data_t* data, uint64_t num_entries) {
+    if (handle == NULL || data == NULL || num_entries == 0 || handle->file_stream == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+    if (handle->header.schema_id != SCHEMA_QUOTE)
+        return TICKS_ERROR_SCHEMA_MISMATCH;
+    return add_records(handle, (const uint64_t*)data, num_entries, ticks_schema_lookup(SCHEMA_QUOTE));
 }
 
 ticks_status_e ticks_verify(ticks_file_t* handle) {
@@ -400,6 +433,8 @@ const char* ticks_status_to_string(ticks_status_e status)
             return "Unsorted Data (timestamps must be non-decreasing)";
         case TICKS_ERROR_CORRUPT_DATA:
             return "Corrupt Data (checksum mismatch)";
+        case TICKS_ERROR_SCHEMA_MISMATCH:
+            return "Schema Mismatch (operation does not match the file's record schema)";
         default:
             return "Unrecognized Status Code";   
     }
@@ -447,11 +482,13 @@ static uint64_t iter_read_uint(const uint8_t* p, size_e size) {
 }
 
 // Load chunk `i` into the iterator's buffer and reset the decode cursor to its
-// first record (cur_* = the chunk's absolute base values).
+// first record (cur[] = the chunk's absolute base values). Reads the column
+// count, widths and encodings straight from the self-describing chunk header,
+// so the iterator does not need the file's schema.
 static ticks_status_e iter_load_chunk(ticks_iterator_t* it, uint32_t i) {
     const ticks_index_entry_t* e = &it->file_handle->index.entries[i];
 
-    if (e->chunk_size < TICKS_CHUNK_HEADER_DISK_SIZE)
+    if (e->chunk_size < TICKS_CHUNK_HEADER_BASE_SIZE)
         return TICKS_ERROR_INVALID_FORMAT;
 
     if (it->chunk_buf == NULL || it->chunk_buf_cap < e->chunk_size) {
@@ -469,17 +506,25 @@ static ticks_status_e iter_load_chunk(ticks_iterator_t* it, uint32_t i) {
 
     const uint8_t* b = it->chunk_buf;
     it->chunk_nrec = le_get_u32(b + 0);
-    if (it->chunk_nrec == 0)
+    it->chunk_ncols = b[4];
+    if (it->chunk_nrec == 0 || it->chunk_ncols == 0 || it->chunk_ncols > TICKS_MAX_COLUMNS)
         return TICKS_ERROR_INVALID_FORMAT;
-    it->cur_t = le_get_u64(b + 4);
-    it->cur_p = le_get_u64(b + 12);
-    it->cur_v = le_get_u64(b + 20);
-    it->ts_w = (size_e)b[28];
-    it->price_w = (size_e)b[29];
-    it->volume_w = (size_e)b[30];
-    it->ts_col = b + TICKS_CHUNK_HEADER_DISK_SIZE;
-    it->price_col = it->ts_col + (uint64_t)(it->chunk_nrec - 1) * it->ts_w;
-    it->volume_col = it->price_col + (uint64_t)(it->chunk_nrec - 1) * it->price_w;
+
+    const uint32_t header_size = TICKS_CHUNK_HEADER_SIZE(it->chunk_ncols);
+    if (e->chunk_size < header_size)
+        return TICKS_ERROR_INVALID_FORMAT;
+
+    const uint8_t* desc = b + TICKS_CHUNK_HEADER_BASE_SIZE;
+    const uint8_t* col = b + header_size;
+    const uint64_t num_deltas = it->chunk_nrec - 1;
+    for (uint8_t j = 0; j < it->chunk_ncols; j++) {
+        it->cur[j] = le_get_u64(desc + 0);
+        it->widths[j] = (size_e)desc[8];
+        it->encs[j] = (col_encoding_e)desc[9];
+        it->cols[j] = col;
+        col += num_deltas * (uint64_t)it->widths[j];
+        desc += TICKS_CHUNK_COL_DESC_SIZE;
+    }
 
     it->current_chunk = i;
     it->current_record_in_chunk = 0;
@@ -487,74 +532,112 @@ static ticks_status_e iter_load_chunk(ticks_iterator_t* it, uint32_t i) {
     return TICKS_OK;
 }
 
-// Advance the decode cursor from record k to k+1, folding in delta k.
+// Advance the decode cursor from record k to k+1, folding in delta k for every
+// column (raw for unsigned columns, un-zig-zagged for signed ones).
 static void iter_advance_record(ticks_iterator_t* it) {
     const uint32_t k = it->current_record_in_chunk;
     if (k + 1 < it->chunk_nrec) {
-        it->cur_t += iter_read_uint(it->ts_col + (uint64_t)k * it->ts_w, it->ts_w);
-        it->cur_p = (uint64_t)((int64_t)it->cur_p +
-            zigzag_decode(iter_read_uint(it->price_col + (uint64_t)k * it->price_w, it->price_w)));
-        it->cur_v = (uint64_t)((int64_t)it->cur_v +
-            zigzag_decode(iter_read_uint(it->volume_col + (uint64_t)k * it->volume_w, it->volume_w)));
+        for (uint8_t j = 0; j < it->chunk_ncols; j++) {
+            const uint64_t raw = iter_read_uint(it->cols[j] + (uint64_t)k * it->widths[j], it->widths[j]);
+            if (it->encs[j] == COL_ENC_DELTA_UNSIGNED)
+                it->cur[j] += raw;
+            else
+                it->cur[j] = (uint64_t)((int64_t)it->cur[j] + zigzag_decode(raw));
+        }
     }
     it->current_record_in_chunk++;
 }
 
-ticks_status_e ticks_iterator_next(ticks_iterator_t* iterator, trade_data_t* out_record)
-{
-    if (iterator == NULL || out_record == NULL)
-        return TICKS_ERROR_INVALID_ARGUMENTS;
-
-    const ticks_index_t* idx = &iterator->file_handle->index;
+// Produce the next record within [from, to) as raw column values (out_values
+// must hold at least the chunk's column count; *out_ncols is set to it). Shared
+// by the typed ticks_iterator_next* wrappers.
+static ticks_status_e iter_next_columns(ticks_iterator_t* it, uint64_t* out_values, uint8_t* out_ncols) {
+    const ticks_index_t* idx = &it->file_handle->index;
 
     for (;;) {
         // Ensure a chunk with un-emitted records is loaded.
-        if (!iterator->chunk_loaded ||
-            iterator->current_record_in_chunk >= iterator->chunk_nrec) {
-
-            uint32_t i = iterator->chunk_loaded ? iterator->current_chunk + 1 : 0;
+        if (!it->chunk_loaded || it->current_record_in_chunk >= it->chunk_nrec) {
+            uint32_t i = it->chunk_loaded ? it->current_chunk + 1 : 0;
             for (; i < idx->num_entries; i++) {
                 const ticks_index_entry_t* e = &idx->entries[i];
                 // Skip chunks lying entirely before the range. Uses last_timestamp,
                 // so even the final chunk is pruned here without being decoded.
-                if (e->chunk_last_timestamp < iterator->from_ms)
+                if (e->chunk_last_timestamp < it->from_ms)
                     continue;
                 // Chunks are time-ordered; once one starts at/after `to`, no later
                 // chunk can qualify either.
-                if (e->chunk_time_base >= iterator->to_ms)
+                if (e->chunk_time_base >= it->to_ms)
                     return TICKS_EOF;
                 break;
             }
             if (i >= idx->num_entries)
                 return TICKS_EOF;
 
-            ticks_status_e st = iter_load_chunk(iterator, i);
+            ticks_status_e st = iter_load_chunk(it, i);
             if (st != TICKS_OK)
                 return st;
         }
 
         // Emit the next qualifying record from the loaded chunk.
-        while (iterator->current_record_in_chunk < iterator->chunk_nrec) {
-            const uint64_t t = iterator->cur_t;
-            const uint64_t p = iterator->cur_p;
-            const uint64_t v = iterator->cur_v;
+        while (it->current_record_in_chunk < it->chunk_nrec) {
+            const uint64_t t = it->cur[0];
 
             // `to` is exclusive and the stream is sorted, so this ends iteration.
-            if (t >= iterator->to_ms)
+            if (t >= it->to_ms)
                 return TICKS_EOF;
 
-            const int emit = (t >= iterator->from_ms);
-            iter_advance_record(iterator);
+            const int emit = (t >= it->from_ms);
+            if (emit)
+                for (uint8_t j = 0; j < it->chunk_ncols; j++)
+                    out_values[j] = it->cur[j]; // snapshot before advancing
+            iter_advance_record(it);
 
             if (emit) {
-                out_record->ms_since_epoch = t;
-                out_record->price = p;
-                out_record->volume = v;
+                if (out_ncols)
+                    *out_ncols = it->chunk_ncols;
                 return TICKS_OK;
             }
         }
         // Chunk exhausted without hitting `to`; loop to find the next chunk.
     }
+}
+
+ticks_status_e ticks_iterator_next(ticks_iterator_t* iterator, trade_data_t* out_record)
+{
+    if (iterator == NULL || out_record == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+    if (iterator->file_handle->header.schema_id != SCHEMA_TRADE)
+        return TICKS_ERROR_SCHEMA_MISMATCH;
+
+    uint64_t vals[TICKS_MAX_COLUMNS];
+    ticks_status_e st = iter_next_columns(iterator, vals, NULL);
+    if (st != TICKS_OK)
+        return st;
+
+    out_record->ms_since_epoch = vals[0];
+    out_record->price = vals[1];
+    out_record->volume = vals[2];
+    return TICKS_OK;
+}
+
+ticks_status_e ticks_iterator_next_quote(ticks_iterator_t* iterator, quote_data_t* out_record)
+{
+    if (iterator == NULL || out_record == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+    if (iterator->file_handle->header.schema_id != SCHEMA_QUOTE)
+        return TICKS_ERROR_SCHEMA_MISMATCH;
+
+    uint64_t vals[TICKS_MAX_COLUMNS];
+    ticks_status_e st = iter_next_columns(iterator, vals, NULL);
+    if (st != TICKS_OK)
+        return st;
+
+    out_record->ms_since_epoch = vals[0];
+    out_record->bid = vals[1];
+    out_record->ask = vals[2];
+    out_record->bid_size = vals[3];
+    out_record->ask_size = vals[4];
+    return TICKS_OK;
 }
 
 ticks_status_e ticks_iterator_destroy(ticks_iterator_t *iterator)
