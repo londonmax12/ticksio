@@ -1,99 +1,358 @@
 format,n,metric,variant,value
 ticks none,100000,size,,400135
-ticks none,100000,write,,0.001664
-ticks none,100000,insert,1000,0.002089
-ticks none,100000,insert,10000,0.001560
-ticks none,100000,insert,100000,0.001555
-ticks none,100000,read,scan,0.000669
-ticks none,100000,read,materialize,0.001263
+ticks none,100000,write,,0.001855
+ticks none,100000,encode,,0.001760
+ticks none,100000,insert,1000,0.002701
+ticks none,100000,insert,10000,0.002148
+ticks none,100000,insert,100000,0.001758
+ticks none,100000,read,scan,0.000796
+ticks none,100000,read,materialize,0.001253
 ticks zstd,100000,size,,141563
-ticks zstd,100000,write,,0.003336
-ticks zstd,100000,insert,1000,0.004293
-ticks zstd,100000,insert,10000,0.003594
-ticks zstd,100000,insert,100000,0.003496
-ticks zstd,100000,read,scan,0.001127
-ticks zstd,100000,read,materialize,0.001589
+ticks zstd,100000,write,,0.003745
+ticks zstd,100000,encode,,0.003596
+ticks zstd,100000,insert,1000,0.007342
+ticks zstd,100000,insert,10000,0.004189
+ticks zstd,100000,insert,100000,0.003979
+ticks zstd,100000,read,scan,0.001310
+ticks zstd,100000,read,materialize,0.001760
 parquet snappy,100000,size,,622162
-parquet snappy,100000,write,,0.010670
-parquet snappy,100000,insert,1000,0.018389
-parquet snappy,100000,insert,10000,0.010036
-parquet snappy,100000,insert,100000,0.008582
-parquet snappy,100000,read,scan,0.001890
-parquet snappy,100000,read,materialize,0.020251
+parquet snappy,100000,write,,0.011571
+parquet snappy,100000,insert,1000,0.021526
+parquet snappy,100000,insert,10000,0.008695
+parquet snappy,100000,insert,100000,0.008711
+parquet snappy,100000,read,scan,0.001208
+parquet snappy,100000,read,materialize,0.001917
 parquet zstd,100000,size,,376503
-parquet zstd,100000,write,,0.009687
-parquet zstd,100000,insert,1000,0.021774
-parquet zstd,100000,insert,10000,0.011978
-parquet zstd,100000,insert,100000,0.012306
-parquet zstd,100000,read,scan,0.002391
-parquet zstd,100000,read,materialize,0.002298
+parquet zstd,100000,write,,0.009684
+parquet zstd,100000,insert,1000,0.021336
+parquet zstd,100000,insert,10000,0.010809
+parquet zstd,100000,insert,100000,0.009550
+parquet zstd,100000,read,scan,0.001726
+parquet zstd,100000,read,materialize,0.002268
 feather zstd,100000,size,,207042
-feather zstd,100000,write,,0.002247
-feather zstd,100000,insert,1000,0.008500
-feather zstd,100000,insert,10000,0.002780
-feather zstd,100000,insert,100000,0.002379
-feather zstd,100000,read,scan,0.004691
-feather zstd,100000,read,materialize,0.003128
+feather zstd,100000,write,,0.002092
+feather zstd,100000,insert,1000,0.008670
+feather zstd,100000,insert,10000,0.002986
+feather zstd,100000,insert,100000,0.002266
+feather zstd,100000,read,scan,0.001344
+feather zstd,100000,read,materialize,0.001641
 bi5,100000,size,,163024
-bi5,100000,write,,0.249175
-bi5,100000,insert,1000,0.242672
-bi5,100000,insert,10000,0.223445
-bi5,100000,insert,100000,0.215561
-bi5,100000,read,scan,0.013502
-bi5,100000,read,materialize,0.011654
+bi5,100000,write,,0.215677
+bi5,100000,insert,1000,0.216626
+bi5,100000,insert,10000,0.228225
+bi5,100000,insert,100000,0.215377
+bi5,100000,read,scan,0.011571
+bi5,100000,read,materialize,0.011327
 csv,100000,size,,2408143
-csv,100000,write,,0.007850
-csv,100000,insert,1000,0.010593
-csv,100000,insert,10000,0.011864
-csv,100000,insert,100000,0.010333
-csv,100000,read,scan,0.009890
-csv,100000,read,materialize,0.003703
-ticks none,200000,size,,800135
-ticks none,200000,write,,0.003226
-ticks none,200000,insert,1000,0.004276
-ticks none,200000,insert,10000,0.003334
-ticks none,200000,insert,100000,0.002895
-ticks none,200000,read,scan,0.001504
-ticks none,200000,read,materialize,0.002681
-ticks zstd,200000,size,,278605
-ticks zstd,200000,write,,0.006694
-ticks zstd,200000,insert,1000,0.012392
-ticks zstd,200000,insert,10000,0.007193
-ticks zstd,200000,insert,100000,0.006545
-ticks zstd,200000,read,scan,0.002330
-ticks zstd,200000,read,materialize,0.003196
-parquet snappy,200000,size,,1258934
-parquet snappy,200000,write,,0.026789
-parquet snappy,200000,insert,1000,0.041839
-parquet snappy,200000,insert,10000,0.020063
-parquet snappy,200000,insert,100000,0.018032
-parquet snappy,200000,read,scan,0.002928
-parquet snappy,200000,read,materialize,0.021112
-parquet zstd,200000,size,,782916
-parquet zstd,200000,write,,0.024862
-parquet zstd,200000,insert,1000,0.047074
-parquet zstd,200000,insert,10000,0.024175
-parquet zstd,200000,insert,100000,0.020407
-parquet zstd,200000,read,scan,0.003544
-parquet zstd,200000,read,materialize,0.004124
-feather zstd,200000,size,,415066
-feather zstd,200000,write,,0.004162
-feather zstd,200000,insert,1000,0.016489
-feather zstd,200000,insert,10000,0.005071
-feather zstd,200000,insert,100000,0.003615
-feather zstd,200000,read,scan,0.006649
-feather zstd,200000,read,materialize,0.002962
-bi5,200000,size,,323757
-bi5,200000,write,,0.559864
-bi5,200000,insert,1000,0.559471
-bi5,200000,insert,10000,0.519709
-bi5,200000,insert,100000,0.553101
-bi5,200000,read,scan,0.025548
-bi5,200000,read,materialize,0.025429
-csv,200000,size,,4816385
-csv,200000,write,,0.018210
-csv,200000,insert,1000,0.025001
-csv,200000,insert,10000,0.016180
-csv,200000,insert,100000,0.016319
-csv,200000,read,scan,0.019659
-csv,200000,read,materialize,0.004879
+csv,100000,write,,0.007535
+csv,100000,insert,1000,0.008626
+csv,100000,insert,10000,0.008100
+csv,100000,insert,100000,0.007704
+csv,100000,read,scan,0.010090
+csv,100000,read,materialize,0.003410
+ticks none,250000,size,,1000135
+ticks none,250000,write,,0.003602
+ticks none,250000,encode,,0.003509
+ticks none,250000,insert,1000,0.005339
+ticks none,250000,insert,10000,0.004165
+ticks none,250000,insert,100000,0.004152
+ticks none,250000,read,scan,0.001907
+ticks none,250000,read,materialize,0.003280
+ticks zstd,250000,size,,346437
+ticks zstd,250000,write,,0.008747
+ticks zstd,250000,encode,,0.008572
+ticks zstd,250000,insert,1000,0.013341
+ticks zstd,250000,insert,10000,0.009430
+ticks zstd,250000,insert,100000,0.009337
+ticks zstd,250000,read,scan,0.002918
+ticks zstd,250000,read,materialize,0.004415
+parquet snappy,250000,size,,1496775
+parquet snappy,250000,write,,0.022697
+parquet snappy,250000,insert,1000,0.042661
+parquet snappy,250000,insert,10000,0.022810
+parquet snappy,250000,insert,100000,0.020881
+parquet snappy,250000,read,scan,0.003004
+parquet snappy,250000,read,materialize,0.003485
+parquet zstd,250000,size,,895180
+parquet zstd,250000,write,,0.024223
+parquet zstd,250000,insert,1000,0.052772
+parquet zstd,250000,insert,10000,0.024823
+parquet zstd,250000,insert,100000,0.021921
+parquet zstd,250000,read,scan,0.003602
+parquet zstd,250000,read,materialize,0.004469
+feather zstd,250000,size,,518722
+feather zstd,250000,write,,0.004576
+feather zstd,250000,insert,1000,0.019866
+feather zstd,250000,insert,10000,0.005893
+feather zstd,250000,insert,100000,0.004547
+feather zstd,250000,read,scan,0.003071
+feather zstd,250000,read,materialize,0.003784
+bi5,250000,size,,404878
+bi5,250000,write,,0.614179
+bi5,250000,insert,1000,0.651547
+bi5,250000,insert,10000,0.607538
+bi5,250000,insert,100000,0.593371
+bi5,250000,read,scan,0.040690
+bi5,250000,read,materialize,0.037022
+csv,250000,size,,6020600
+csv,250000,write,,0.020193
+csv,250000,insert,1000,0.023579
+csv,250000,insert,10000,0.018458
+csv,250000,insert,100000,0.021152
+csv,250000,read,scan,0.025750
+csv,250000,read,materialize,0.005621
+ticks none,500000,size,,2000135
+ticks none,500000,write,,0.008722
+ticks none,500000,encode,,0.008574
+ticks none,500000,insert,1000,0.012499
+ticks none,500000,insert,10000,0.008791
+ticks none,500000,insert,100000,0.008429
+ticks none,500000,read,scan,0.004259
+ticks none,500000,read,materialize,0.006914
+ticks zstd,500000,size,,687122
+ticks zstd,500000,write,,0.016174
+ticks zstd,500000,encode,,0.016034
+ticks zstd,500000,insert,1000,0.024602
+ticks zstd,500000,insert,10000,0.022792
+ticks zstd,500000,insert,100000,0.017734
+ticks zstd,500000,read,scan,0.005784
+ticks zstd,500000,read,materialize,0.008532
+parquet snappy,500000,size,,2695982
+parquet snappy,500000,write,,0.035777
+parquet snappy,500000,insert,1000,0.094113
+parquet snappy,500000,insert,10000,0.043315
+parquet snappy,500000,insert,100000,0.040889
+parquet snappy,500000,read,scan,0.005229
+parquet snappy,500000,read,materialize,0.006815
+parquet zstd,500000,size,,1475013
+parquet zstd,500000,write,,0.037447
+parquet zstd,500000,insert,1000,0.105754
+parquet zstd,500000,insert,10000,0.049220
+parquet zstd,500000,insert,100000,0.044461
+parquet zstd,500000,read,scan,0.006463
+parquet zstd,500000,read,materialize,0.007696
+feather zstd,500000,size,,1036410
+feather zstd,500000,write,,0.008488
+feather zstd,500000,insert,1000,0.040930
+feather zstd,500000,insert,10000,0.011149
+feather zstd,500000,insert,100000,0.009125
+feather zstd,500000,read,scan,0.006107
+feather zstd,500000,read,materialize,0.007142
+bi5,500000,size,,806162
+bi5,500000,write,,1.396460
+bi5,500000,insert,1000,1.415816
+bi5,500000,insert,10000,1.400505
+bi5,500000,insert,100000,1.404047
+bi5,500000,read,scan,0.063118
+bi5,500000,read,materialize,0.061073
+csv,500000,size,,12040688
+csv,500000,write,,0.037768
+csv,500000,insert,1000,0.044298
+csv,500000,insert,10000,0.037444
+csv,500000,insert,100000,0.039669
+csv,500000,read,scan,0.050042
+csv,500000,read,materialize,0.007896
+ticks none,1000000,size,,4000135
+ticks none,1000000,write,,0.016084
+ticks none,1000000,encode,,0.015936
+ticks none,1000000,insert,1000,0.019704
+ticks none,1000000,insert,10000,0.015740
+ticks none,1000000,insert,100000,0.015407
+ticks none,1000000,read,scan,0.008063
+ticks none,1000000,read,materialize,0.013730
+ticks zstd,1000000,size,,1367610
+ticks zstd,1000000,write,,0.030500
+ticks zstd,1000000,encode,,0.030357
+ticks zstd,1000000,insert,1000,0.043339
+ticks zstd,1000000,insert,10000,0.040682
+ticks zstd,1000000,insert,100000,0.034490
+ticks zstd,1000000,read,scan,0.011208
+ticks zstd,1000000,read,materialize,0.016788
+parquet snappy,1000000,size,,5104763
+parquet snappy,1000000,write,,0.059174
+parquet snappy,1000000,insert,1000,0.184244
+parquet snappy,1000000,insert,10000,0.091728
+parquet snappy,1000000,insert,100000,0.080891
+parquet snappy,1000000,read,scan,0.010473
+parquet snappy,1000000,read,materialize,0.012337
+parquet zstd,1000000,size,,2640432
+parquet zstd,1000000,write,,0.063779
+parquet zstd,1000000,insert,1000,0.210284
+parquet zstd,1000000,insert,10000,0.098698
+parquet zstd,1000000,insert,100000,0.087426
+parquet zstd,1000000,read,scan,0.012895
+parquet zstd,1000000,read,materialize,0.014723
+feather zstd,1000000,size,,2071666
+feather zstd,1000000,write,,0.017446
+feather zstd,1000000,insert,1000,0.080805
+feather zstd,1000000,insert,10000,0.022650
+feather zstd,1000000,insert,100000,0.016799
+feather zstd,1000000,read,scan,0.012026
+feather zstd,1000000,read,materialize,0.013614
+bi5,1000000,size,,1611281
+bi5,1000000,write,,3.240073
+bi5,1000000,insert,1000,3.238782
+bi5,1000000,insert,10000,3.224699
+bi5,1000000,insert,100000,3.670505
+bi5,1000000,read,scan,0.117987
+bi5,1000000,read,materialize,0.129597
+csv,1000000,size,,24081595
+csv,1000000,write,,0.076589
+csv,1000000,insert,1000,0.085288
+csv,1000000,insert,10000,0.073895
+csv,1000000,insert,100000,0.075455
+csv,1000000,read,scan,0.099373
+csv,1000000,read,materialize,0.014928
+ticks none,2500000,size,,10000135
+ticks none,2500000,write,,0.041542
+ticks none,2500000,encode,,0.041345
+ticks none,2500000,insert,1000,0.057181
+ticks none,2500000,insert,10000,0.043260
+ticks none,2500000,insert,100000,0.039052
+ticks none,2500000,read,scan,0.020842
+ticks none,2500000,read,materialize,0.034478
+ticks zstd,2500000,size,,3403264
+ticks zstd,2500000,write,,0.075155
+ticks zstd,2500000,encode,,0.074880
+ticks zstd,2500000,insert,1000,0.110383
+ticks zstd,2500000,insert,10000,0.084731
+ticks zstd,2500000,insert,100000,0.085412
+ticks zstd,2500000,read,scan,0.029372
+ticks zstd,2500000,read,materialize,0.043991
+parquet snappy,2500000,size,,12900180
+parquet snappy,2500000,write,,0.162474
+parquet snappy,2500000,insert,1000,0.439181
+parquet snappy,2500000,insert,10000,0.223001
+parquet snappy,2500000,insert,100000,0.202880
+parquet snappy,2500000,read,scan,0.025924
+parquet snappy,2500000,read,materialize,0.020281
+parquet zstd,2500000,size,,6652155
+parquet zstd,2500000,write,,0.172859
+parquet zstd,2500000,insert,1000,0.538176
+parquet zstd,2500000,insert,10000,0.256495
+parquet zstd,2500000,insert,100000,0.220977
+parquet zstd,2500000,read,scan,0.030770
+parquet zstd,2500000,read,materialize,0.024040
+feather zstd,2500000,size,,5180602
+feather zstd,2500000,write,,0.041881
+feather zstd,2500000,insert,1000,0.226772
+feather zstd,2500000,insert,10000,0.062369
+feather zstd,2500000,insert,100000,0.041925
+feather zstd,2500000,read,scan,0.031732
+feather zstd,2500000,read,materialize,0.034001
+bi5,2500000,size,,4020944
+bi5,2500000,write,,8.282170
+bi5,2500000,insert,1000,8.398302
+bi5,2500000,insert,10000,8.356141
+bi5,2500000,insert,100000,8.234472
+bi5,2500000,read,scan,0.285976
+bi5,2500000,read,materialize,0.306014
+csv,2500000,size,,60203833
+csv,2500000,write,,0.187337
+csv,2500000,insert,1000,0.213319
+csv,2500000,insert,10000,0.188624
+csv,2500000,insert,100000,0.194728
+csv,2500000,read,scan,0.244993
+csv,2500000,read,materialize,0.037233
+ticks none,5000000,size,,20000198
+ticks none,5000000,write,,0.078039
+ticks none,5000000,encode,,0.077851
+ticks none,5000000,insert,1000,0.103065
+ticks none,5000000,insert,10000,0.076516
+ticks none,5000000,insert,100000,0.073258
+ticks none,5000000,read,scan,0.040794
+ticks none,5000000,read,materialize,0.066511
+ticks zstd,5000000,size,,6806179
+ticks zstd,5000000,write,,0.142391
+ticks zstd,5000000,encode,,0.142181
+ticks zstd,5000000,insert,1000,0.203345
+ticks zstd,5000000,insert,10000,0.154627
+ticks zstd,5000000,insert,100000,0.163659
+ticks zstd,5000000,read,scan,0.055086
+ticks zstd,5000000,read,materialize,0.081298
+parquet snappy,5000000,size,,25543932
+parquet snappy,5000000,write,,0.299699
+parquet snappy,5000000,insert,1000,0.904969
+parquet snappy,5000000,insert,10000,0.561414
+parquet snappy,5000000,insert,100000,0.528149
+parquet snappy,5000000,read,scan,0.050584
+parquet snappy,5000000,read,materialize,0.082515
+parquet zstd,5000000,size,,13117239
+parquet zstd,5000000,write,,0.311306
+parquet zstd,5000000,insert,1000,1.073181
+parquet zstd,5000000,insert,10000,0.524175
+parquet zstd,5000000,insert,100000,0.438087
+parquet zstd,5000000,read,scan,0.067513
+parquet zstd,5000000,read,materialize,0.082451
+feather zstd,5000000,size,,10354746
+feather zstd,5000000,write,,0.081314
+feather zstd,5000000,insert,1000,0.387161
+feather zstd,5000000,insert,10000,0.113039
+feather zstd,5000000,insert,100000,0.085141
+feather zstd,5000000,read,scan,0.066122
+feather zstd,5000000,read,materialize,0.102831
+bi5,5000000,size,,7987342
+bi5,5000000,write,,18.196606
+bi5,5000000,insert,1000,17.110158
+bi5,5000000,insert,10000,16.903485
+bi5,5000000,insert,100000,29.835627
+bi5,5000000,read,scan,0.716542
+bi5,5000000,read,materialize,0.748432
+csv,5000000,size,,120407831
+csv,5000000,write,,0.648377
+csv,5000000,insert,1000,0.851077
+csv,5000000,insert,10000,0.430337
+csv,5000000,insert,100000,0.424818
+csv,5000000,read,scan,0.662761
+csv,5000000,read,materialize,0.186309
+ticks none,10000000,size,,40000261
+ticks none,10000000,write,,0.163219
+ticks none,10000000,encode,,0.163007
+ticks none,10000000,insert,1000,0.262790
+ticks none,10000000,insert,10000,0.166838
+ticks none,10000000,insert,100000,0.168416
+ticks none,10000000,read,scan,0.087733
+ticks none,10000000,read,materialize,0.164733
+ticks zstd,10000000,size,,13604318
+ticks zstd,10000000,write,,0.305600
+ticks zstd,10000000,encode,,0.305422
+ticks zstd,10000000,insert,1000,0.447212
+ticks zstd,10000000,insert,10000,0.329549
+ticks zstd,10000000,insert,100000,0.347526
+ticks zstd,10000000,read,scan,0.119386
+ticks zstd,10000000,read,materialize,0.182743
+parquet snappy,10000000,size,,51250754
+parquet snappy,10000000,write,,0.710717
+parquet snappy,10000000,insert,1000,3.431978
+parquet snappy,10000000,insert,10000,1.656127
+parquet snappy,10000000,insert,100000,1.427577
+parquet snappy,10000000,read,scan,0.134721
+parquet snappy,10000000,read,materialize,0.198286
+parquet zstd,10000000,size,,26465572
+parquet zstd,10000000,write,,1.069115
+parquet zstd,10000000,insert,1000,4.449744
+parquet zstd,10000000,insert,10000,2.224680
+parquet zstd,10000000,insert,100000,1.645132
+parquet zstd,10000000,read,scan,0.143633
+parquet zstd,10000000,read,materialize,0.182813
+feather zstd,10000000,size,,20715442
+feather zstd,10000000,write,,0.245513
+feather zstd,10000000,insert,1000,1.673819
+feather zstd,10000000,insert,10000,0.469655
+feather zstd,10000000,insert,100000,0.265215
+feather zstd,10000000,read,scan,0.153574
+feather zstd,10000000,read,materialize,0.205619
+bi5,10000000,size,,15796035
+bi5,10000000,write,,57.258733
+bi5,10000000,insert,1000,52.905826
+bi5,10000000,insert,10000,40.128564
+bi5,10000000,insert,100000,62.000943
+bi5,10000000,read,scan,1.410480
+bi5,10000000,read,materialize,1.525193
+csv,10000000,size,,240815779
+csv,10000000,write,,1.239157
+csv,10000000,insert,1000,1.690804
+csv,10000000,insert,10000,1.361187
+csv,10000000,insert,100000,1.292641
+csv,10000000,read,scan,1.295389
+csv,10000000,read,materialize,0.294709
