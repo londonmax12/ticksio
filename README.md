@@ -50,6 +50,35 @@ real-world values (e.g. `price_scale = -2` ⇒ prices are in cents).
 
 ---
 
+## Benchmarks
+
+A repeatable comparison against Parquet, Feather (Arrow IPC), and CSV on the same
+5,000,000-row synthetic trade stream (identical `int64` rows; ticks files
+verified to round-trip losslessly). Harness and methodology — plus the caveats
+you should read before quoting any of this — live in [bench/](bench/README.md).
+
+![format comparison](bench/comparison.png)
+
+_5,000,000 synthetic trade ticks. Lower size is better; higher throughput is better._
+
+| format | bytes/tick | size | write (M/s) | insert (M/s) | read (M/s) |
+|---|--:|--:|--:|--:|--:|
+| **ticks zstd** | **1.36** | **6.8 MB** | 14.8 | 11.0 | 36.3 |
+| ticks none | 4.00 | 20.0 MB | 17.7 | 13.4 | 74.9 |
+| parquet zstd | 2.62 | 13.1 MB | 9.1 | 6.8 | 63.1 |
+| parquet snappy | 5.11 | 25.5 MB | 10.5 | 7.2 | 50.1 |
+| feather zstd | 2.07 | 10.4 MB | 43.2 | 42.5 | 30.2 |
+| csv | 24.08 | 120.4 MB | 3.8 | 5.4 | 25.6 |
+
+On this workload `.ticks` + ZSTD is the most compact — **~1.5× smaller than the
+best Parquet config and ~3.7× smaller than Parquet's snappy default** — while the
+uncompressed `.ticks` variant has the fastest full-scan read. Feather leads on
+write throughput. Numbers are from one synthetic dataset and two different timing
+harnesses (C vs pyarrow); see the caveats in [bench/](bench/README.md) before
+generalizing.
+
+---
+
 ## Building
 
 ticksio builds with CMake (≥ 3.25) and a C99 compiler. ZSTD is fetched and built
@@ -157,6 +186,7 @@ src/c/
     ticksio_constants.h     #   on-disk offsets, sizes, version
   src/                      # implementation (chunks, compression, index, schema, csv)
   tests/                    # roundtrip + sandbox
+bench/                      # format comparison vs Parquet/Feather/CSV (chart + scripts)
 ```
 
 ## Format versioning
