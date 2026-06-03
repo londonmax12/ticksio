@@ -35,10 +35,8 @@ struct ticks_file_t_internal {
 
 struct ticks_iterator_t_internal {
     ticks_file_t* file_handle;
-    time_t from;          // inclusive range start (seconds since epoch)
-    time_t to;            // exclusive range end (seconds since epoch)
-    uint64_t from_ms;     // `from`/`to` in milliseconds, to match stored tick timestamps
-    uint64_t to_ms;
+    uint64_t from_ms;     // inclusive range start, epoch ms (matches stored timestamps)
+    uint64_t to_ms;       // exclusive range end, epoch ms
     uint32_t current_chunk;            // index of the loaded chunk (valid when chunk_loaded)
     uint32_t current_record_in_chunk;  // next record to emit within the loaded chunk
     int chunk_loaded;                  // whether the decode state below is populated

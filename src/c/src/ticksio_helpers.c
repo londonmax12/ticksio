@@ -6,11 +6,14 @@
 
 size_e determine_min_size_uint64(uint64_t value)
 {
-    if (value < UINT8_MAX) {
+    // Bounds are inclusive: a value equal to UINT8_MAX (255) still fits in one
+    // byte, so it must select SIZE_8BIT, not be bumped to the next width. Using
+    // `<` here would over-size every delta that lands exactly on a boundary.
+    if (value <= UINT8_MAX) {
         return SIZE_8BIT;  // 1 byte
-    } else if (value < UINT16_MAX) {
+    } else if (value <= UINT16_MAX) {
         return SIZE_16BIT; // 2 bytes
-    } else if (value < UINT32_MAX) {
+    } else if (value <= UINT32_MAX) {
         return SIZE_32BIT; // 4 bytes
     } else {
         return SIZE_64BIT; // 8 bytes

@@ -11,6 +11,14 @@ extern "C" {
 #define TICKS_MAGIC "TICK"
 #define TICKS_MAGIC_SIZE 4
 #define TICKS_VERSION 5
+// Oldest on-disk version this build can still decode correctly. The
+// self-describing/generic chunk header, the 32-byte index entry, and the
+// header's schema_id field all stabilized at v4, and a v4 file is necessarily
+// COMPRESSION_NONE, so the v5 reader parses it byte-for-byte. v1–v3 used
+// incompatible header sizes, index-entry sizes, and chunk layouts; reading one
+// with this code would silently misparse, so they are rejected outright rather
+// than accepted and decoded as garbage.
+#define TICKS_MIN_READ_VERSION 4
 #define TICKS_TICKER_SIZE 8
 #define TICKS_CURRENCY_SIZE 3
 #define TICKS_COUNTRY_SIZE 2

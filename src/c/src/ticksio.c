@@ -203,9 +203,12 @@ ticks_status_e ticks_open(const char* filename, const char* mode, ticks_file_t**
         return TICKS_ERROR_INVALID_FORMAT;
     }
 
-    // Validate the format version.
+    // Validate the format version. Reject anything newer than we know about, but
+    // also anything older than TICKS_MIN_READ_VERSION: pre-v4 files used header,
+    // index, and chunk layouts incompatible with this reader, so accepting them
+    // would silently misparse rather than fail cleanly.
     uint16_t version = le_get_u16(region + TICKS_OFF_VERSION);
-    if (version == 0 || version > TICKS_VERSION) {
+    if (version < TICKS_MIN_READ_VERSION || version > TICKS_VERSION) {
         fclose(handle->file_stream);
         free(handle);
         return TICKS_ERROR_INVALID_FORMAT;
@@ -260,7 +263,17 @@ ticks_status_e ticks_open_write(const char* filename, ticks_file_t** out_handle)
 ticks_status_e ticks_close(ticks_file_t *handle) {
     if (handle == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
-    
+
+    // For a write handle, the index lives only in memory during the session
+    // (appends no longer rewrite it each time — see add_records). Serialize it to
+    // disk now, in a single pass, before closing the stream. A read handle's
+    // in-memory index is just a cache of what is already on disk, so it is never
+    // written back.
+    ticks_status_e flush_status = TICKS_OK;
+    if (handle->mode == FILE_MODE_WRITE && handle->file_stream != NULL &&
+        handle->index.num_entries > 0)
+        flush_status = create_index(handle);
+
     // Try to close the internal file stream if it's open. Whatever the result,
     // every owned allocation (the index array and the handle itself) must still
     // be released — a failed fclose does not exempt us from freeing them.
@@ -269,7 +282,10 @@ ticks_status_e ticks_close(ticks_file_t *handle) {
     free(handle->index.entries); // free(NULL) is a no-op when none was allocated
     free(handle);
 
-    // fclose failed (errno set by fclose); report it after cleanup.
+    // Surface an index-flush failure first (the file would otherwise be missing
+    // its index); otherwise report any fclose error.
+    if (flush_status != TICKS_OK)
+        return flush_status;
     return (status != 0) ? TICKS_ERROR_FILE_IO : TICKS_OK;
 }
 
@@ -321,9 +337,12 @@ static ticks_status_e add_records(ticks_file_t* handle, const uint64_t* values,
     if (r != TICKS_OK)
         return r;
 
-    r = create_index(handle);
-    if (r != TICKS_OK)
-        return r;
+    // The index is NOT rewritten here. Each chunk append already advances and
+    // persists index_offset, and the entries accumulate in memory; the index is
+    // serialized to disk once, in a single pass, at ticks_close. Writing the
+    // whole index after every add (its previous behavior) made N incremental
+    // appends cost O(N^2) in index bytes written — a real cost for the common
+    // ingest pattern of appending one Dukascopy hour/day file at a time.
 
     // Update the file-level summary. min_timestamp is fixed by the very first
     // tick ever written; max_timestamp and record_count grow with each batch.
@@ -482,31 +501,28 @@ const char* ticks_status_to_string(ticks_status_e status)
 }
 
 
-ticks_status_e ticks_iterator_create(ticks_file_t *handle, time_t from, time_t to, ticks_iterator_t** out_iterator)
+ticks_status_e ticks_iterator_create(ticks_file_t *handle, int64_t from_ms, int64_t to_ms, ticks_iterator_t** out_iterator)
 {
     if (handle == NULL || out_iterator == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
-    // The range must be a well-formed, non-empty [from, to) window with
-    // non-negative bounds. The window is NOT validated against wall-clock time:
-    // a .ticks file is a historical store and a caller may legitimately ask for
-    // a window extending up to (or past) "now", and iteration must not depend on
-    // the current clock. Out-of-range windows simply yield no records.
-    if (from >= to || from < 0 || to <= 0)
+    // The range must be a well-formed, non-empty [from_ms, to_ms) window with
+    // non-negative bounds. Bounds are in epoch milliseconds — the same unit as
+    // the stored timestamps — so sub-second queries are expressible. The window
+    // is NOT validated against wall-clock time: a .ticks file is a historical
+    // store and a caller may legitimately ask for a window extending up to (or
+    // past) "now". Out-of-range windows simply yield no records.
+    if (from_ms >= to_ms || from_ms < 0 || to_ms <= 0)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
     ticks_iterator_t* iterator = malloc(sizeof(ticks_iterator_t));
     if (iterator == NULL)
         return TICKS_ERROR_MEMORY_ALLOCATION;
-    
+
     memset(iterator, 0, sizeof(ticks_iterator_t));
     iterator->file_handle = handle;
-    iterator->from = from;
-    iterator->to = to;
-    // Stored tick timestamps are in milliseconds, but the public range is given
-    // in seconds (validated against time(NULL) above). Convert once up front.
-    iterator->from_ms = (uint64_t)from * 1000u;
-    iterator->to_ms = (uint64_t)to * 1000u;
+    iterator->from_ms = (uint64_t)from_ms;
+    iterator->to_ms = (uint64_t)to_ms;
     iterator->current_chunk = 0;
     iterator->current_record_in_chunk = 0;
     iterator->chunk_loaded = 0;
@@ -630,6 +646,24 @@ static void iter_advance_record(ticks_iterator_t* it) {
     it->current_record_in_chunk++;
 }
 
+// First index entry whose chunk could overlap the window — i.e. the first whose
+// chunk_last_timestamp >= from_ms. Chunks are stored in non-decreasing time
+// order, so chunk_last_timestamp is itself non-decreasing across entries, which
+// makes this a binary search (lower_bound). This turns the initial seek of a
+// range query from O(chunks-before-the-window) into O(log n), so a query deep in
+// a large file no longer pays for every chunk that precedes it.
+static uint32_t iter_first_chunk(const ticks_index_t* idx, uint64_t from_ms) {
+    uint32_t lo = 0, hi = idx->num_entries;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (idx->entries[mid].chunk_last_timestamp < from_ms)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 // Produce the next record within [from, to) as raw column values (out_values
 // must hold at least the chunk's column count; *out_ncols is set to it). Shared
 // by the typed ticks_iterator_next* wrappers.
@@ -637,9 +671,12 @@ static ticks_status_e iter_next_columns(ticks_iterator_t* it, uint64_t* out_valu
     const ticks_index_t* idx = &it->file_handle->index;
 
     for (;;) {
-        // Ensure a chunk with un-emitted records is loaded.
+        // Ensure a chunk with un-emitted records is loaded. The very first seek
+        // jumps straight to the first possibly-overlapping chunk via binary
+        // search; afterwards we just walk forward to the next chunk in order.
         if (!it->chunk_loaded || it->current_record_in_chunk >= it->chunk_nrec) {
-            uint32_t i = it->chunk_loaded ? it->current_chunk + 1 : 0;
+            uint32_t i = it->chunk_loaded ? it->current_chunk + 1
+                                          : iter_first_chunk(idx, it->from_ms);
             for (; i < idx->num_entries; i++) {
                 const ticks_index_entry_t* e = &idx->entries[i];
                 // Skip chunks lying entirely before the range. Uses last_timestamp,

@@ -80,13 +80,11 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const uint64_
         perror("ERROR: Unable to allocate memory for chunk structure\n");
         return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
     }
-
-    chunk->data = malloc(MAX_CHUNK_SIZE);
-    if (chunk->data == NULL) {
-        free(chunk);
-        perror("ERROR: Unable to allocate memory for chunk data\n");
-        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
-    }
+    // chunk->data is allocated to the chunk's exact serialized size once the
+    // dry-run pass below has settled num_records and the per-column widths —
+    // rather than eagerly grabbing MAX_CHUNK_SIZE (16 MB) for every chunk, which
+    // was wasteful for the small batches a per-file ingest produces.
+    chunk->data = NULL;
 
     const uint64_t start = *row_index;
     const uint64_t* const base_rec = values + start * ncols;
@@ -130,6 +128,20 @@ static create_chunk_result create_chunk(uint64_t* const row_index, const uint64_
     // the chunk header) so range queries can bound every chunk's time span
     // without decoding — including the final chunk, which has no following base.
     chunk->last_timestamp = values[(start + chunk->num_records - 1) * ncols + 0];
+
+    // Now that num_records and the per-column widths are final, the serialized
+    // size is exactly header + (num_records - 1) deltas per column. Allocate that
+    // precisely. (The dry-run loop above already guaranteed it is <= MAX_CHUNK_SIZE.)
+    uint64_t total_delta_bytes = 0;
+    for (uint8_t j = 0; j < ncols; j++)
+        total_delta_bytes += (uint64_t)(chunk->num_records - 1) * chunk->widths[j];
+    const uint64_t exact_size = (uint64_t)header_size + total_delta_bytes;
+    chunk->data = malloc(exact_size);
+    if (chunk->data == NULL) {
+        free(chunk);
+        perror("ERROR: Unable to allocate memory for chunk data\n");
+        return (create_chunk_result){.chunk = NULL, .status = TICKS_ERROR_MEMORY_ALLOCATION};
+    }
 
     // Serialize the self-describing chunk header: fixed prefix, then one
     // descriptor (base + width + encoding) per column.

@@ -175,7 +175,9 @@ int main() {
     time_t to = timegm_portable(&to_time);
 
     ticks_iterator_t* iterator = NULL;
-    ticks_status_e iter_create_status = ticks_iterator_create(iter_handle, from, to, &iterator);
+    // ticks_iterator_create takes epoch milliseconds; `from`/`to` are seconds.
+    ticks_status_e iter_create_status =
+        ticks_iterator_create(iter_handle, (int64_t)from * 1000, (int64_t)to * 1000, &iterator);
 
     if (iterator == NULL || iter_create_status != TICKS_OK) {
         print_error("ticks_iterator_create", iter_create_status);

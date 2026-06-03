@@ -118,8 +118,9 @@ ticks_open_read("aapl.ticks", &r);
 ticks_verify(r); // optional: recompute CRCs + cross-check the summary
 
 ticks_iterator_t* it = NULL;
-// [from, to) in seconds; records are produced in ascending time order
-ticks_iterator_create(r, from_seconds, to_seconds, &it);
+// [from, to) in epoch milliseconds (same unit as stored ticks, so sub-second
+// windows work); records are produced in ascending time order
+ticks_iterator_create(r, from_ms, to_ms, &it);
 
 trade_data_t rec;
 ticks_status_e s;

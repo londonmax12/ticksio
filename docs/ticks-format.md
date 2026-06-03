@@ -186,12 +186,14 @@ the file-level summary — `record_count` from the summed chunk `num_records`, a
 corruption error if it disagrees with the values stored in the header.
 
 ### 3.1 Writer crash-consistency
-The writer is **not crash-atomic**. A write appends chunk bytes, then appends the
-index, then updates the header's `index_offset` / `index_size` and file-level
-summary in place; a process or power failure partway through can leave the file
-in any of several intermediate states (chunk bytes with no index entry, an index
-that does not yet cover the last chunk, or a header pointer/summary that lags the
-data). The format is **recoverable** rather than self-healing: because every
+The writer is **not crash-atomic**. As records are added, the writer appends
+chunk bytes and updates the header's `index_offset` and file-level summary in
+place, but the **index itself is written only once, in a single pass, at
+`ticks_close`** (the in-memory index accumulates during the session, so repeated
+appends don't rewrite it each time). A process or power failure partway through
+can therefore leave the file in any of several intermediate states (chunk bytes
+with no index on disk at all, or a header pointer/summary that lags the data).
+The format is **recoverable** rather than self-healing: because every
 chunk is self-describing (§2.2) and chunks are laid out contiguously from offset
 72 in non-decreasing time order, a repair tool can rebuild the index and the
 file-level summary by scanning chunk headers from the start of the chunk region

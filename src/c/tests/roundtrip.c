@@ -148,7 +148,8 @@ static int test_trades(void) {
     uint64_t want = count_in_range((const uint64_t*)in, N, 3, from_s * 1000, to_s * 1000);
 
     ticks_iterator_t* it = NULL;
-    if (ticks_iterator_create(r, (time_t)from_s, (time_t)to_s, &it) != TICKS_OK) {
+    // The iterator range is in epoch milliseconds (same unit as the stored ticks).
+    if (ticks_iterator_create(r, (int64_t)(from_s * 1000), (int64_t)(to_s * 1000), &it) != TICKS_OK) {
         fprintf(stderr, "FAIL: trade iter create\n"); return 1;
     }
     uint64_t got_n = 0, prev_t = 0; trade_data_t rec; ticks_status_e ns;
@@ -231,7 +232,7 @@ static int test_quotes(void) {
     uint64_t want = count_in_range((const uint64_t*)in, N, 5, from_s * 1000, to_s * 1000);
 
     ticks_iterator_t* it = NULL;
-    if (ticks_iterator_create(r, (time_t)from_s, (time_t)to_s, &it) != TICKS_OK) {
+    if (ticks_iterator_create(r, (int64_t)(from_s * 1000), (int64_t)(to_s * 1000), &it) != TICKS_OK) {
         fprintf(stderr, "FAIL: quote iter create\n"); return 1;
     }
     // Wrong typed accessor must be rejected.
@@ -336,7 +337,7 @@ static int test_compression(void) {
     uint64_t first_s = in[0].ms_since_epoch / 1000;
     uint64_t last_s = in[N - 1].ms_since_epoch / 1000;
     ticks_iterator_t* it = NULL;
-    if (ticks_iterator_create(r, (time_t)first_s, (time_t)(last_s + 1), &it) != TICKS_OK) {
+    if (ticks_iterator_create(r, (int64_t)(first_s * 1000), (int64_t)((last_s + 1) * 1000), &it) != TICKS_OK) {
         fprintf(stderr, "FAIL: zstd iter create\n"); return 1;
     }
     uint64_t got_n = 0; trade_data_t rec; ticks_status_e ns;

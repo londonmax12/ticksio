@@ -102,14 +102,19 @@ ticks_status_e ticks_verify(ticks_file_t* handle);
 const char* ticks_status_to_string(ticks_status_e status);
 
 /*
-* @brief Creates an iterator for traversing records within a specified time range
+* @brief Creates an iterator for traversing records within a specified time range.
+*
+* The range is given in epoch milliseconds — the same unit the ticks are stored
+* in — so sub-second windows (e.g. a single 250 ms slice) are expressible. The
+* window is [from_ms, to_ms): from_ms inclusive, to_ms exclusive.
+*
 * @param handle Pointer to the ticks file handle
-* @param from Start time (inclusive)
-* @param to End time (exclusive)
+* @param from_ms Start time, inclusive, in epoch milliseconds (>= 0)
+* @param to_ms End time, exclusive, in epoch milliseconds (> from_ms)
 * @param out_iterator Pointer to store the resulting iterator
 * @return Status code indicating success or failure (0 = OK)
 */
-ticks_status_e ticks_iterator_create(ticks_file_t* handle, time_t from, time_t to, ticks_iterator_t** out_iterator);
+ticks_status_e ticks_iterator_create(ticks_file_t* handle, int64_t from_ms, int64_t to_ms, ticks_iterator_t** out_iterator);
 
 /*
 * @brief Returns the next tick within the iterator's [from, to) range.
