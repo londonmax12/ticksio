@@ -38,17 +38,18 @@ static ticks_status_e write_initial_data(FILE *file, struct ticks_file_t_interna
     return TICKS_OK;
 }
 
-// Rewrite the file-level summary (record_count, min/max timestamp) at its fixed
-// header location. The three fields are contiguous on disk (see the layout in
-// ticksio_constants.h), so they go out in a single write.
-static ticks_status_e write_summary(struct ticks_file_t_internal* handle) {
-    uint8_t buf[3 * sizeof(uint64_t)];
-    le_put_u64(buf + 0, handle->header.record_count);
-    le_put_u64(buf + 8, handle->header.min_timestamp);
-    le_put_u64(buf + 16, handle->header.max_timestamp);
-    if (ticks_fseek64(handle->file_stream, TICKS_OFF_RECORD_COUNT, SEEK_SET) != 0)
+// Re-serialize and rewrite the entire fixed header region at offset 0 with the
+// session's final values: the file-level summary (record_count, min/max
+// timestamp) plus the index_offset / index_size pointers. Called once at
+// ticks_close. During an active write session these fields are maintained in
+// memory only — persisting them per chunk/per batch forced a seek back to the
+// header between sequential appends, which dominated streaming-insert time.
+static ticks_status_e finalize_header(struct ticks_file_t_internal* handle) {
+    uint8_t buf[TICKS_HEADER_REGION_SIZE];
+    serialize_header(buf, &handle->header, handle->index_offset, handle->index_size);
+    if (ticks_fseek64(handle->file_stream, 0, SEEK_SET) != 0)
         return TICKS_ERROR_FILE_IO;
-    if (fwrite(buf, 1, sizeof(buf), handle->file_stream) != sizeof(buf))
+    if (fwrite(buf, 1, TICKS_HEADER_REGION_SIZE, handle->file_stream) != TICKS_HEADER_REGION_SIZE)
         return TICKS_ERROR_FILE_IO;
     return TICKS_OK;
 }
@@ -264,15 +265,19 @@ ticks_status_e ticks_close(ticks_file_t *handle) {
     if (handle == NULL)
         return TICKS_ERROR_INVALID_ARGUMENTS;
 
-    // For a write handle, the index lives only in memory during the session
-    // (appends no longer rewrite it each time — see add_records). Serialize it to
-    // disk now, in a single pass, before closing the stream. A read handle's
-    // in-memory index is just a cache of what is already on disk, so it is never
-    // written back.
+    // For a write handle, the index and the header's summary/index pointers live
+    // only in memory during the session (appends no longer rewrite them each
+    // time — see add_records). Serialize the index to disk now, in a single
+    // pass, then rewrite the header region with the final summary and index
+    // pointers, before closing the stream. A read handle's in-memory index is
+    // just a cache of what is already on disk, so nothing is written back.
     ticks_status_e flush_status = TICKS_OK;
     if (handle->mode == FILE_MODE_WRITE && handle->file_stream != NULL &&
-        handle->index.num_entries > 0)
+        handle->index.num_entries > 0) {
         flush_status = create_index(handle);
+        if (flush_status == TICKS_OK)
+            flush_status = finalize_header(handle);
+    }
 
     // Try to close the internal file stream if it's open. Whatever the result,
     // every owned allocation (the index array and the handle itself) must still
@@ -344,16 +349,19 @@ static ticks_status_e add_records(ticks_file_t* handle, const uint64_t* values,
     // appends cost O(N^2) in index bytes written — a real cost for the common
     // ingest pattern of appending one Dukascopy hour/day file at a time.
 
-    // Update the file-level summary. min_timestamp is fixed by the very first
-    // tick ever written; max_timestamp and record_count grow with each batch.
+    // Update the file-level summary in memory. min_timestamp is fixed by the
+    // very first tick ever written; max_timestamp and record_count grow with
+    // each batch. These header fields are NOT written to disk here: like the
+    // index, they are persisted once at ticks_close (finalize_header). Rewriting
+    // the summary after every add() seeked back to the header region between
+    // appends and slowed streaming inserts; the on-disk index does not exist
+    // until close anyway, so a stale in-progress header changes nothing about
+    // the (already non-atomic) crash behavior.
     const uint64_t last_ts = values[(num_records - 1) * ncols];
     if (!handle->has_data)
         handle->header.min_timestamp = values[0];
     handle->header.max_timestamp = last_ts;
     handle->header.record_count += num_records;
-    r = write_summary(handle);
-    if (r != TICKS_OK)
-        return r;
 
     // Record the high-water timestamp so subsequent calls stay ordered.
     handle->last_timestamp = last_ts;

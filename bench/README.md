@@ -1,9 +1,10 @@
 # Benchmarks
 
-A repeatable comparison of `.ticks` against Parquet, Feather (Arrow IPC), and
-CSV on the same synthetic trade stream. Measures **size**, **write**,
-**insert**, and **read**, records the raw numbers to [results.csv](results.csv),
-and renders [comparison.png](comparison.png).
+A repeatable comparison of `.ticks` against Parquet, Feather (Arrow IPC),
+Dukascopy **bi5** (the raw vendor tick format ticksio ingests from), and CSV on
+the same synthetic trade stream. Measures **size**, **write**, **insert**, and
+**read**, records the raw numbers to [results.csv](results.csv), and renders
+[comparison.png](comparison.png).
 
 ![format comparison](comparison.png)
 
@@ -17,7 +18,9 @@ walk, round-lot volumes). Every format encodes the **identical rows** as three
 `int64` columns — `timestamp, price, volume` — so the comparison is
 representation-for-representation (ticksio stores price as a scaled integer; the
 Parquet/Feather columns match it exactly). The ticks files are verified to
-round-trip all N records losslessly before timing.
+round-trip all N records losslessly before timing. The one exception is bi5,
+which by design uses 32-bit fields and a per-file time offset (lossless on this
+dataset); see the caveat below.
 
 | metric | meaning |
 |--------|---------|
@@ -39,6 +42,14 @@ round-trip all N records losslessly before timing.
   overhead for things ticksio doesn't do (arbitrary/nested schemas, per-column
   predicate pushdown, broad ecosystem). "Smaller for tick data" ≠ "better
   format."
+- **bi5 is modelled, not byte-exact.** Real Dukascopy `.bi5` is a 5-field
+  big-endian quote record (ms-offset, ask, bid, ask/bid volume), LZMA-compressed
+  one file per hour. This bench is a *trade* stream, so the bi5 point applies
+  that same strategy — fixed-width big-endian records + whole-file LZMA, with a
+  32-bit per-file time offset — to the identical trade rows the other formats
+  encode (lossless here). It captures bi5's row-wise + LZMA cost on this data,
+  not the exact vendor bytes. LZMA's slow write/insert is a real property of the
+  format. (Uses Python's stdlib `lzma`, so it adds no extra dependency.)
 
 ## Running it
 
@@ -60,3 +71,21 @@ python bench/chart.py
 
 `bench.exe` must run before `bench_py.py` (it writes both the shared `out.csv`
 and the header row of `results.csv`; the Python side appends to it).
+
+## Scaling sweep
+
+The single-N run above is a snapshot. To see how each format behaves as the
+stream grows — does bytes/tick stay flat, does throughput fall off at large N —
+run the sweep, which repeats the whole comparison across a range of row counts
+and renders [scaling.png](scaling.png): a 2x2 of size + write/insert/read, each a
+multi-line chart (one line per format) against N on a log axis.
+
+```sh
+python bench/scaling.py              # full geometric sweep (100k .. 10M), then render
+python bench/scaling.py 1e5 1e6 1e7  # custom row counts
+python bench/scaling.py plot         # re-render scaling.png from existing scaling.csv
+```
+
+The sweep shells out to `bench.exe` once per N (build it first, step 1 above) and
+writes the tidy per-N numbers to [scaling.csv](scaling.csv). The `plot` mode
+re-renders from that CSV without re-timing.

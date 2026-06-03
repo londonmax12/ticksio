@@ -185,13 +185,6 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
         return TICKS_ERROR_INVALID_ARGUMENTS;
     }
 
-    // Flushing the stream serves as a robust check. If the underlying file descriptor is invalid, fflush will fail and return an error.
-    // This helps confirm that the file stream has been closed externally.
-    if (fflush(handle->file_stream) != 0) {
-        perror("ERROR: fflush failed before writing chunk data. The file stream is likely closed");
-        return TICKS_ERROR_FILE_IO;
-    }
-
     const uint64_t chunk_write_pos = handle->index_offset;
 
     // Choose what actually lands on disk. With no compression the chunk's
@@ -265,20 +258,16 @@ ticks_status_e append_chunk_and_update_index(ticks_file_t* handle, const ticks_c
     handle->index.num_entries++;
 
     // The next chunk (or the index) will be written immediately after this one
-    // (disk_size, not the uncompressed size, when a codec is in use).
+    // (disk_size, not the uncompressed size, when a codec is in use). This is
+    // tracked in memory only — the header's index_offset, index_size, and
+    // file-level summary are all persisted once at ticks_close (see
+    // finalize_header). Rewriting them after every chunk forced a seek back to
+    // the header region between each append, which defeated the stream's
+    // write-behind buffering and dominated streaming-insert time. The index
+    // itself is likewise written only at close, so a mid-session crash already
+    // leaves no usable index on disk; deferring these header fields too does not
+    // weaken the (already non-atomic) crash story — see docs/ticks-format.md §3.1.
     handle->index_offset = chunk_write_pos + disk_size;
-
-    // Persist the updated index_offset at its fixed header location (LE).
-    uint8_t off_buf[sizeof(uint64_t)];
-    le_put_u64(off_buf, handle->index_offset);
-    if (ticks_fseek64(handle->file_stream, TICKS_OFF_INDEX_OFFSET, SEEK_SET) != 0) {
-        perror("ERROR: ticks_fseek64 before index_offset update failed");
-        return TICKS_ERROR_FILE_IO;
-    }
-    if (fwrite(off_buf, 1, sizeof(off_buf), handle->file_stream) != sizeof(off_buf)) {
-        perror("ERROR: fwrite (index_offset update)");
-        return TICKS_ERROR_FILE_IO;
-    }
 
     return TICKS_OK;
 }

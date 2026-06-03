@@ -187,12 +187,14 @@ corruption error if it disagrees with the values stored in the header.
 
 ### 3.1 Writer crash-consistency
 The writer is **not crash-atomic**. As records are added, the writer appends
-chunk bytes and updates the header's `index_offset` and file-level summary in
-place, but the **index itself is written only once, in a single pass, at
-`ticks_close`** (the in-memory index accumulates during the session, so repeated
-appends don't rewrite it each time). A process or power failure partway through
-can therefore leave the file in any of several intermediate states (chunk bytes
-with no index on disk at all, or a header pointer/summary that lags the data).
+chunk bytes only; the **index, the header's `index_offset` / `index_size`
+pointers, and the file-level summary are all written once, in a single pass, at
+`ticks_close`** (they accumulate in memory during the session, so repeated
+appends stay pure sequential writes — they don't seek back to the header or
+rewrite the index each time). A process or power failure partway through can
+therefore leave the file in any of several intermediate states: chunk bytes with
+no index on disk at all, and a header whose `index_offset`/summary still hold
+their initial (empty-file) values rather than describing the appended chunks.
 The format is **recoverable** rather than self-healing: because every
 chunk is self-describing (§2.2) and chunks are laid out contiguously from offset
 72 in non-decreasing time order, a repair tool can rebuild the index and the

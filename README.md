@@ -52,7 +52,8 @@ real-world values (e.g. `price_scale = -2` ⇒ prices are in cents).
 
 ## Benchmarks
 
-A repeatable comparison against Parquet, Feather (Arrow IPC), and CSV on the same
+A repeatable comparison against Parquet, Feather (Arrow IPC), Dukascopy **bi5**
+(the raw vendor tick format ticksio ingests from), and CSV on the same
 5,000,000-row synthetic trade stream (identical `int64` rows; ticks files
 verified to round-trip losslessly). Harness and methodology — plus the caveats
 you should read before quoting any of this — live in [bench/](bench/README.md).
@@ -63,19 +64,27 @@ _5,000,000 synthetic trade ticks. Lower size is better; higher throughput is bet
 
 | format | bytes/tick | size | write (M/s) | insert (M/s) | read (M/s) |
 |---|--:|--:|--:|--:|--:|
-| **ticks zstd** | **1.36** | **6.8 MB** | 14.8 | 11.0 | 36.3 |
-| ticks none | 4.00 | 20.0 MB | 17.7 | 13.4 | 74.9 |
-| parquet zstd | 2.62 | 13.1 MB | 9.1 | 6.8 | 63.1 |
-| parquet snappy | 5.11 | 25.5 MB | 10.5 | 7.2 | 50.1 |
-| feather zstd | 2.07 | 10.4 MB | 43.2 | 42.5 | 30.2 |
-| csv | 24.08 | 120.4 MB | 3.8 | 5.4 | 25.6 |
+| **ticks zstd** | **1.36** | **6.8 MB** | 38.1 | 27.0 | 64.1 |
+| ticks none | 4.00 | 20.0 MB | 70.7 | 52.2 | 105.7 |
+| parquet zstd | 2.62 | 13.1 MB | 16.4 | 12.0 | 101.5 |
+| parquet snappy | 5.11 | 25.5 MB | 18.5 | 13.2 | 101.9 |
+| feather zstd | 2.07 | 10.4 MB | 64.2 | 64.0 | 58.4 |
+| bi5 | 1.60 | 8.0 MB | 0.3 | 0.3 | 8.5 |
+| csv | 24.08 | 120.4 MB | 14.1 | 13.6 | 54.1 |
 
-On this workload `.ticks` + ZSTD is the most compact — **~1.5× smaller than the
-best Parquet config and ~3.7× smaller than Parquet's snappy default** — while the
-uncompressed `.ticks` variant has the fastest full-scan read. Feather leads on
-write throughput. Numbers are from one synthetic dataset and two different timing
-harnesses (C vs pyarrow); see the caveats in [bench/](bench/README.md) before
-generalizing.
+On this workload `.ticks` + ZSTD is the **most compact** of every format here —
+1.5× smaller than Feather, 1.9× smaller than the best Parquet config, and even
+**1.2× smaller than Dukascopy bi5**, the purpose-built vendor format. The headline
+against bi5 is throughput: ticks matches its compactness while writing it **100×+
+faster** and reading it ~8× faster (bi5's whole-file LZMA bottoms out at ~0.3 M
+ticks/s to write). Uncompressed `.ticks` leads both write throughput and full-scan read;
+Feather still leads streaming insert. Numbers are one consistent run on a quiet
+machine over one synthetic dataset, across two timing harnesses (ticks in C, the
+rest in pyarrow); see the caveats in [bench/](bench/README.md) before generalizing.
+
+How these hold up as the stream grows from 100k to 10M rows — does bytes/tick
+stay flat, where does throughput fall off — is charted in
+[bench/scaling.png](bench/scaling.png) (`python bench/scaling.py`).
 
 ---
 

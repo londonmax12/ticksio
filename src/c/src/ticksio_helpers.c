@@ -51,8 +51,16 @@ void le_put_u32(uint8_t* buf, uint32_t value) {
 }
 
 void le_put_u64(uint8_t* buf, uint64_t value) {
-    for (int i = 0; i < 8; i++)
-        buf[i] = (uint8_t)((value >> (8 * i)) & 0xFF);
+    // Unrolled (vs. a byte loop) so the compiler can fuse this into a single
+    // 64-bit store on little-endian targets.
+    buf[0] = (uint8_t)(value);
+    buf[1] = (uint8_t)(value >> 8);
+    buf[2] = (uint8_t)(value >> 16);
+    buf[3] = (uint8_t)(value >> 24);
+    buf[4] = (uint8_t)(value >> 32);
+    buf[5] = (uint8_t)(value >> 40);
+    buf[6] = (uint8_t)(value >> 48);
+    buf[7] = (uint8_t)(value >> 56);
 }
 
 uint16_t le_get_u16(const uint8_t* buf) {
@@ -65,22 +73,71 @@ uint32_t le_get_u32(const uint8_t* buf) {
 }
 
 uint64_t le_get_u64(const uint8_t* buf) {
-    uint64_t value = 0;
-    for (int i = 0; i < 8; i++)
-        value |= ((uint64_t)buf[i]) << (8 * i);
-    return value;
+    // Unrolled (vs. a byte loop) so the compiler can fuse this into a single
+    // 64-bit load on little-endian targets.
+    return  (uint64_t)buf[0]        | ((uint64_t)buf[1] << 8)  |
+           ((uint64_t)buf[2] << 16) | ((uint64_t)buf[3] << 24) |
+           ((uint64_t)buf[4] << 32) | ((uint64_t)buf[5] << 40) |
+           ((uint64_t)buf[6] << 48) | ((uint64_t)buf[7] << 56);
 }
 
 // --- CRC32 (IEEE 802.3) ---
-uint32_t ticks_crc32(const uint8_t* data, size_t len) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int bit = 0; bit < 8; bit++) {
-            uint32_t mask = -(crc & 1u);
-            crc = (crc >> 1) ^ (0xEDB88420u & mask);
+// Slice-by-8 table-driven CRC32 (reflected, polynomial 0xEDB88420, init/final
+// 0xFFFFFFFF) — byte-for-byte identical to the classic bit-at-a-time loop, but
+// it folds 8 input bytes per iteration through 8 precomputed tables instead of
+// looping 8 times per byte. The CRC is recomputed over every chunk's on-disk
+// bytes on each append, so this is a hot path for write/insert (and verify).
+//
+// The tables are derived from the same polynomial and reading the 4-byte words
+// little-endian, so the result is independent of host byte order.
+static uint32_t crc32_table[8][256];
+static int crc32_table_ready = 0;
+
+static void crc32_build_table(void) {
+    for (uint32_t n = 0; n < 256; n++) {
+        uint32_t c = n;
+        for (int k = 0; k < 8; k++)
+            c = (c & 1u) ? (0xEDB88420u ^ (c >> 1)) : (c >> 1);
+        crc32_table[0][n] = c;
+    }
+    for (uint32_t n = 0; n < 256; n++) {
+        uint32_t c = crc32_table[0][n];
+        for (int k = 1; k < 8; k++) {
+            c = crc32_table[0][c & 0xFFu] ^ (c >> 8);
+            crc32_table[k][n] = c;
         }
     }
+    crc32_table_ready = 1; // benign if two writers race: both compute the same bytes
+}
+
+uint32_t ticks_crc32(const uint8_t* data, size_t len) {
+    if (!crc32_table_ready)
+        crc32_build_table();
+
+    uint32_t crc = 0xFFFFFFFFu;
+    const uint8_t* p = data;
+
+    // Consume 8 bytes per iteration through the slice-by-8 tables.
+    while (len >= 8) {
+        uint32_t lo = crc ^ ((uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                             ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
+        uint32_t hi = (uint32_t)p[4] | ((uint32_t)p[5] << 8) |
+                      ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
+        crc = crc32_table[7][lo & 0xFFu] ^
+              crc32_table[6][(lo >> 8) & 0xFFu] ^
+              crc32_table[5][(lo >> 16) & 0xFFu] ^
+              crc32_table[4][(lo >> 24) & 0xFFu] ^
+              crc32_table[3][hi & 0xFFu] ^
+              crc32_table[2][(hi >> 8) & 0xFFu] ^
+              crc32_table[1][(hi >> 16) & 0xFFu] ^
+              crc32_table[0][(hi >> 24) & 0xFFu];
+        p += 8;
+        len -= 8;
+    }
+    // Tail: the classic table-driven byte-at-a-time step.
+    while (len--)
+        crc = crc32_table[0][(crc ^ *p++) & 0xFFu] ^ (crc >> 8);
+
     return ~crc;
 }
 

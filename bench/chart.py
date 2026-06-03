@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-ORDER = ["ticks zstd", "ticks none", "parquet zstd", "parquet snappy", "feather zstd", "csv"]
+ORDER = ["ticks zstd", "ticks none", "parquet zstd", "parquet snappy", "feather zstd", "bi5", "csv"]
 HILITE = {"ticks zstd", "ticks none"}
 
 rows = {}
@@ -39,7 +39,7 @@ panels = [
 ]
 
 fig, axes = plt.subplots(2, 2, figsize=(13, 8))
-fig.suptitle(f".ticks vs Parquet / Feather / CSV  —  {n:,} synthetic trade ticks",
+fig.suptitle(f".ticks vs Parquet / Feather / bi5 / CSV  —  {n:,} synthetic trade ticks",
              fontsize=14, fontweight="bold")
 for ax, (title, vals, unit) in zip(axes.flat, panels):
     bars = ax.bar(labels, vals, color=colors)

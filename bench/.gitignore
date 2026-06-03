@@ -4,7 +4,14 @@ out.csv
 p.parquet
 p.feather
 p.csv
+p.bi5
 bench.exe
 *.obj
+__pycache__/
+sweep.log
 
-# committed outputs are kept: comparison.png, results.csv, results.md
+# committed outputs are kept: comparison.png, results.csv, results.md,
+# scaling.csv, scaling.png. The root .gitignore has a global *.csv rule, so the
+# committed CSVs must be re-included explicitly here.
+!results.csv
+!scaling.csv
