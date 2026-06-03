@@ -148,6 +148,38 @@ ticks_status_e ticks_iterator_next_quote(ticks_iterator_t* iterator, quote_data_
 */
 ticks_status_e ticks_iterator_destroy(ticks_iterator_t* iterator);
 
+/*
+* @brief Materializes the records in [from_ms, to_ms) column-major, decoding each
+*        chunk's columns straight into caller-provided per-column output arrays.
+*
+* This is the bulk "load it all into memory" read. Unlike repeatedly calling
+* ticks_iterator_next (which reconstructs one record at a time across all columns
+* and leaves the caller to transpose row-structs into column arrays), this decodes
+* each column in a single tight pass — folding its cumulative deltas directly into
+* its destination array — so there is no per-record struct and no row->column
+* reshape. For a full-file read every chunk is decoded on this fast path; only the
+* at-most-two chunks straddling a sub-range window's edges take a record-checked
+* path.
+*
+* out_columns[j] receives column j's values (column 0 is the timestamp, ms since
+* epoch); each of the num_columns arrays must hold at least `capacity` int64s.
+* num_columns must equal the file's schema column count.
+*
+* @param handle      The file handle (open for reading).
+* @param from_ms     Range start, inclusive, epoch ms (>= 0).
+* @param to_ms       Range end, exclusive, epoch ms (> from_ms).
+* @param out_columns Array of num_columns destination pointers (one per column).
+* @param num_columns Number of columns; must match the file's schema.
+* @param capacity    Capacity (in records) of each output array.
+* @param out_count   Set to the number of records written.
+* @return TICKS_OK on success; TICKS_ERROR_SCHEMA_MISMATCH if num_columns does not
+*         match the file's schema; TICKS_ERROR_INVALID_ARGUMENTS if a buffer is
+*         too small for the range; or an I/O / format error code.
+*/
+ticks_status_e ticks_read_columns(ticks_file_t* handle, int64_t from_ms, int64_t to_ms,
+                                  int64_t* const* out_columns, uint8_t num_columns,
+                                  uint64_t capacity, uint64_t* out_count);
+
 // Compression is configured per file via ticks_header_t.compression_type
 // (COMPRESSION_NONE / COMPRESSION_ZSTD) at ticks_new_file time; chunks are then
 // transparently (de)compressed by the add/iterate paths. See docs/ticks-format.md §4.

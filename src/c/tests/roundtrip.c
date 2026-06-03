@@ -165,9 +165,65 @@ static int test_trades(void) {
                 (unsigned long long)got_n, (unsigned long long)want, ns); return 1;
     }
 
+    // ticks_read_columns (columnar materialize) must reproduce exactly what the
+    // row decode does — full file and a sub-range — and reject misuse.
+    {
+        int64_t* mts = malloc(N * sizeof(int64_t));
+        int64_t* mpx = malloc(N * sizeof(int64_t));
+        int64_t* mvol = malloc(N * sizeof(int64_t));
+        if (!mts || !mpx || !mvol) { fprintf(stderr, "alloc mat\n"); return 1; }
+        int64_t* cols[3] = { mts, mpx, mvol };
+
+        uint64_t mc = 0;
+        ticks_status_e ms = ticks_read_columns(r, (int64_t)got.min_timestamp,
+                                               (int64_t)got.max_timestamp + 1, cols, 3, N, &mc);
+        if (ms != TICKS_OK || mc != N) {
+            fprintf(stderr, "FAIL: read_columns full count %llu != %llu (status %d)\n",
+                    (unsigned long long)mc, (unsigned long long)N, ms); return 1;
+        }
+        for (uint64_t i = 0; i < N; i++) {
+            if ((uint64_t)mts[i] != in[i].ms_since_epoch || (uint64_t)mpx[i] != in[i].price ||
+                (uint64_t)mvol[i] != in[i].volume) {
+                fprintf(stderr, "FAIL: read_columns rec %llu mismatch\n", (unsigned long long)i); return 1;
+            }
+        }
+
+        // Sub-range: same window the iterator checked above; cross-check values
+        // against a reference scan over `in` (exercises the boundary-chunk path).
+        uint64_t mc2 = 0;
+        ms = ticks_read_columns(r, (int64_t)(from_s * 1000), (int64_t)(to_s * 1000), cols, 3, N, &mc2);
+        if (ms != TICKS_OK || mc2 != want) {
+            fprintf(stderr, "FAIL: read_columns range count %llu != %llu (status %d)\n",
+                    (unsigned long long)mc2, (unsigned long long)want, ms); return 1;
+        }
+        uint64_t ri = 0;
+        for (uint64_t i = 0; i < N; i++) {
+            uint64_t t = in[i].ms_since_epoch;
+            if (t >= from_s * 1000 && t < to_s * 1000) {
+                if ((uint64_t)mts[ri] != in[i].ms_since_epoch || (uint64_t)mpx[ri] != in[i].price ||
+                    (uint64_t)mvol[ri] != in[i].volume) {
+                    fprintf(stderr, "FAIL: read_columns range rec %llu mismatch\n", (unsigned long long)ri); return 1;
+                }
+                ri++;
+            }
+        }
+
+        // Wrong column count and under-capacity must be rejected, not misread.
+        if (ticks_read_columns(r, (int64_t)got.min_timestamp, (int64_t)got.max_timestamp + 1,
+                               cols, 5, N, &mc) != TICKS_ERROR_SCHEMA_MISMATCH) {
+            fprintf(stderr, "FAIL: expected SCHEMA_MISMATCH for ncols=5 on trade file\n"); return 1;
+        }
+        if (ticks_read_columns(r, (int64_t)got.min_timestamp, (int64_t)got.max_timestamp + 1,
+                               cols, 3, N - 1, &mc) != TICKS_ERROR_INVALID_ARGUMENTS) {
+            fprintf(stderr, "FAIL: expected INVALID_ARGUMENTS for under-capacity\n"); return 1;
+        }
+
+        free(mts); free(mpx); free(mvol);
+    }
+
     ticks_close(r); free(in); remove(fn);
     printf("PASS trade: %llu recs / %d chunk(s) decoded exactly; CRC+summary ok; "
-           "iterator %llu recs; %.2fx vs naive 24B.\n",
+           "iterator + columnar materialize %llu recs; %.2fx vs naive 24B.\n",
            (unsigned long long)N, chunks, (unsigned long long)got_n, (double)N * 24.0 / (double)disk);
     return 0;
 }

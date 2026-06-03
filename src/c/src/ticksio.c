@@ -778,3 +778,169 @@ ticks_status_e ticks_iterator_destroy(ticks_iterator_t *iterator)
 
     return TICKS_OK;
 }
+
+// --- Columnar materialize (ticks_read_columns) ---------------------------------
+// The row iterator above reconstructs records one at a time, folding one delta per
+// column into cur[] per record; a caller materializing into arrays then transposes
+// those row structs back into columns. The functions below skip that round trip:
+// each column is decoded in its own pass, folding its cumulative deltas straight
+// into the destination array. The column's width and encoding are constant for the
+// whole pass, so they are hoisted out of the inner loop (no per-record width switch
+// and no per-record struct write).
+
+// Decode a column's cumulative deltas into out[0..nrec), writing every record.
+// `base` is the column's absolute first value (record 0). The width is constant
+// over the column, so the per-element read is selected once, outside the loop.
+static void decode_column_full(const uint8_t* col, size_e width, col_encoding_e enc,
+                               uint64_t base, uint32_t nrec, int64_t* out) {
+    uint64_t v = base;
+    out[0] = (int64_t)v;
+#define TICKS_DECODE_FULL(READ_AT)                                                  \
+    do {                                                                            \
+        if (enc == COL_ENC_DELTA_UNSIGNED)                                          \
+            for (uint32_t k = 1; k < nrec; k++) { v += (READ_AT); out[k] = (int64_t)v; } \
+        else                                                                        \
+            for (uint32_t k = 1; k < nrec; k++) {                                   \
+                v = (uint64_t)((int64_t)v + zigzag_decode(READ_AT));                \
+                out[k] = (int64_t)v;                                                \
+            }                                                                       \
+    } while (0)
+    switch (width) {
+        case SIZE_8BIT:  TICKS_DECODE_FULL(col[k - 1]); break;
+        case SIZE_16BIT: TICKS_DECODE_FULL(le_get_u16(col + (size_t)(k - 1) * 2)); break;
+        case SIZE_32BIT: TICKS_DECODE_FULL(le_get_u32(col + (size_t)(k - 1) * 4)); break;
+        default:         TICKS_DECODE_FULL(le_get_u64(col + (size_t)(k - 1) * 8)); break;
+    }
+#undef TICKS_DECODE_FULL
+}
+
+// Like decode_column_full but stores only records [r_lo, r_hi) (still folds every
+// delta up to r_hi, since they are cumulative). Used only for the at-most-two
+// chunks that straddle a sub-range window's edges, so the per-element width switch
+// here is not on the hot path. Returns the number of records written.
+static uint32_t decode_column_range(const uint8_t* col, size_e width, col_encoding_e enc,
+                                    uint64_t base, uint32_t nrec,
+                                    uint32_t r_lo, uint32_t r_hi, int64_t* out) {
+    uint64_t v = base;
+    uint32_t w = 0;
+    if (r_lo == 0 && r_hi > 0)
+        out[w++] = (int64_t)v;
+    for (uint32_t k = 1; k < nrec && k < r_hi; k++) {
+        uint64_t raw;
+        switch (width) {
+            case SIZE_8BIT:  raw = col[k - 1]; break;
+            case SIZE_16BIT: raw = le_get_u16(col + (size_t)(k - 1) * 2); break;
+            case SIZE_32BIT: raw = le_get_u32(col + (size_t)(k - 1) * 4); break;
+            default:         raw = le_get_u64(col + (size_t)(k - 1) * 8); break;
+        }
+        if (enc == COL_ENC_DELTA_UNSIGNED)
+            v += raw;
+        else
+            v = (uint64_t)((int64_t)v + zigzag_decode(raw));
+        if (k >= r_lo)
+            out[w++] = (int64_t)v;
+    }
+    return w;
+}
+
+// Find the contiguous in-range record sub-range [*r_lo, *r_hi) for [from, to) by
+// walking the timestamp column (column 0, unsigned-delta, non-decreasing within a
+// chunk). If no record reaches `from`, sets an empty range (*r_lo == *r_hi == 0).
+static void chunk_range_indices(const uint8_t* tcol, size_e width, uint64_t base,
+                                uint32_t nrec, uint64_t from, uint64_t to,
+                                uint32_t* r_lo, uint32_t* r_hi) {
+    uint64_t v = base;
+    uint32_t lo = nrec, hi = nrec;
+    for (uint32_t k = 0; k < nrec; k++) {
+        if (k > 0) {
+            switch (width) {
+                case SIZE_8BIT:  v += tcol[k - 1]; break;
+                case SIZE_16BIT: v += le_get_u16(tcol + (size_t)(k - 1) * 2); break;
+                case SIZE_32BIT: v += le_get_u32(tcol + (size_t)(k - 1) * 4); break;
+                default:         v += le_get_u64(tcol + (size_t)(k - 1) * 8); break;
+            }
+        }
+        if (lo == nrec && v >= from)
+            lo = k;
+        if (v >= to) {           // first record at/after `to` bounds the range
+            hi = k;
+            break;
+        }
+    }
+    if (lo == nrec) { *r_lo = 0; *r_hi = 0; return; } // nothing reached `from`
+    *r_lo = lo;
+    *r_hi = hi;                  // == nrec when no record reached `to`
+}
+
+ticks_status_e ticks_read_columns(ticks_file_t* handle, int64_t from_ms, int64_t to_ms,
+                                  int64_t* const* out_columns, uint8_t num_columns,
+                                  uint64_t capacity, uint64_t* out_count) {
+    if (handle == NULL || out_columns == NULL || out_count == NULL)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+    if (from_ms >= to_ms || from_ms < 0 || to_ms <= 0)
+        return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    const ticks_schema_t* schema = ticks_schema_lookup(handle->header.schema_id);
+    if (schema == NULL)
+        return TICKS_ERROR_INVALID_FORMAT;
+    if (num_columns != schema->num_columns)
+        return TICKS_ERROR_SCHEMA_MISMATCH;
+    for (uint8_t j = 0; j < num_columns; j++)
+        if (out_columns[j] == NULL)
+            return TICKS_ERROR_INVALID_ARGUMENTS;
+
+    *out_count = 0;
+
+    // Reuse the iterator for chunk loading + buffer management (it owns the
+    // decompress scratch); we drive chunk selection ourselves and decode columns
+    // directly rather than calling ticks_iterator_next.
+    ticks_iterator_t* it = NULL;
+    ticks_status_e st = ticks_iterator_create(handle, from_ms, to_ms, &it);
+    if (st != TICKS_OK)
+        return st;
+
+    const ticks_index_t* idx = &handle->index;
+    uint64_t write_pos = 0;
+
+    for (uint32_t i = iter_first_chunk(idx, it->from_ms); i < idx->num_entries; i++) {
+        const ticks_index_entry_t* e = &idx->entries[i];
+        if (e->chunk_last_timestamp < it->from_ms)
+            continue;                       // entirely before the window
+        if (e->chunk_time_base >= it->to_ms)
+            break;                          // time-ordered: nothing later qualifies
+
+        st = iter_load_chunk(it, i);
+        if (st != TICKS_OK)
+            break;
+        if (it->chunk_ncols != num_columns) { st = TICKS_ERROR_INVALID_FORMAT; break; }
+
+        const uint32_t nrec = it->chunk_nrec;
+        // The index bounds let us tell, without decoding, whether the whole chunk
+        // falls inside the window — the common case for a full-file read.
+        if (e->chunk_time_base >= it->from_ms && e->chunk_last_timestamp < it->to_ms) {
+            if (write_pos + nrec > capacity) { st = TICKS_ERROR_INVALID_ARGUMENTS; break; }
+            for (uint8_t j = 0; j < num_columns; j++)
+                decode_column_full(it->cols[j], it->widths[j], it->encs[j],
+                                   it->cur[j], nrec, out_columns[j] + write_pos);
+            write_pos += nrec;
+        } else {
+            uint32_t r_lo, r_hi;
+            chunk_range_indices(it->cols[0], it->widths[0], it->cur[0], nrec,
+                                it->from_ms, it->to_ms, &r_lo, &r_hi);
+            const uint32_t cnt = (r_hi > r_lo) ? (r_hi - r_lo) : 0;
+            if (cnt == 0)
+                continue;
+            if (write_pos + cnt > capacity) { st = TICKS_ERROR_INVALID_ARGUMENTS; break; }
+            for (uint8_t j = 0; j < num_columns; j++)
+                decode_column_range(it->cols[j], it->widths[j], it->encs[j],
+                                   it->cur[j], nrec, r_lo, r_hi, out_columns[j] + write_pos);
+            write_pos += cnt;
+        }
+    }
+
+    ticks_iterator_destroy(it);
+    if (st != TICKS_OK)
+        return st;
+    *out_count = write_pos;
+    return TICKS_OK;
+}
