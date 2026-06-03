@@ -11,9 +11,12 @@ bench/results.csv those produce, and accumulates every row — already tagged wi
 its N — into bench/scaling.csv. It then renders bench/scaling.png: a 2x2 panel of
 size + write/insert/read, each a multi-line chart (one line per format) against
 N on a log x-axis. The full single-N run measures an insert *curve* over batch
-size and *two* read modes; to keep the scaling view legible each panel collapses
-to one representative point per N — insert at the 100k batch, read in
-materialize mode — both noted in the panel titles. The ticks lines are bold/red.
+size and *two* read modes; the scaling view draws both endpoints of each so it
+tells the same story the comparison chart does — insert at the 1k (solid) and
+100k (dashed) batch, read in scan (solid) and materialize (dashed) mode, the
+styles noted in the panel titles. Collapsing to a single point per N instead
+lands on ticks' two weakest sub-points (100k insert, where feather catches it,
+and materialize), underselling it. The ticks lines are bold/red.
 
 `bench.exe` must already be built (see bench/README.md); the sweep shells out to
 it once per N. The heavy `run` mode is separate from `plot` so the chart can be
@@ -36,9 +39,15 @@ FIELDS = ["format", "n", "metric", "variant", "value"]
 # Geometric sweep: each step ~2-2.5x so the log x-axis is evenly spaced.
 DEFAULT_NS = [100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000]
 
-# Representative points collapsed from the full single-N run for the scaling view.
-INSERT_PLOT_BATCH = "100000"
-READ_PLOT_MODE = "materialize"
+# Sub-points drawn per N for the insert and read panels. The full single-N run
+# measures an insert *curve* over batch size and *two* read modes; rather than
+# collapse each to one point (which lands on ticks' two weakest sub-points — at
+# the 100k insert batch feather catches ticks, and materialize is ticks' slower
+# read mode), the scaling view draws both endpoints so it tells the same story
+# the comparison chart does. Solid = ticks' stronger sub-point, dashed = the
+# weaker one, both real and measured.
+INSERT_PLOT_BATCHES = [("1000", "1k", "solid"), ("100000", "100k", "dashed")]
+READ_PLOT_MODES = [("scan", "scan", "solid"), ("materialize", "materialize", "dashed")]
 
 ORDER = ["ticks zstd", "ticks none", "parquet zstd", "parquet snappy",
          "feather zstd", "bi5", "csv"]
@@ -109,37 +118,50 @@ def plot():
     series = load()
     fmts = [f for f in ORDER if f in series] + [f for f in series if f not in ORDER]
 
-    # panel -> (title, unit, point->y, log_y). point is the per-N metric dict.
+    # Each panel draws one or more sub-point series. A series is
+    # (linestyle, point->y, sub-label); size/write have a single solid series,
+    # while insert and read draw both endpoints (see INSERT_PLOT_BATCHES /
+    # READ_PLOT_MODES) so the panel shows ticks' strong and weak sub-points
+    # rather than only the weak one. `sub` is None for single-series panels and
+    # names the sub-point otherwise (used in the per-panel linestyle legend).
+    # panel -> (title, unit, [series...], log_y).
     panels = [
         ("Size  (bytes / tick — lower is better)", "bytes/tick",
-         lambda n, p: p[("size", "")] / n, False),
+         [("solid", lambda n, p: p[("size", "")] / n, None)], False),
         ("Write throughput  (bulk, M ticks/s — higher is better)", "M ticks/s",
-         lambda n, p: n / p[("write", "")] / 1e6, True),
-        (f"Insert throughput  ({INSERT_PLOT_BATCH[:-3]}k batch, M ticks/s)", "M ticks/s",
-         lambda n, p: n / p[("insert", INSERT_PLOT_BATCH)] / 1e6, True),
-        (f"Read throughput  ({READ_PLOT_MODE}, M ticks/s)", "M ticks/s",
-         lambda n, p: n / p[("read", READ_PLOT_MODE)] / 1e6, True),
+         [("solid", lambda n, p: n / p[("write", "")] / 1e6, None)], True),
+        ("Insert throughput  (M ticks/s — solid 1k batch, dashed 100k)", "M ticks/s",
+         [(ls, (lambda b: lambda n, p: n / p[("insert", b)] / 1e6)(batch), lbl)
+          for batch, lbl, ls in INSERT_PLOT_BATCHES], True),
+        ("Read throughput  (M ticks/s — solid scan, dashed materialize)", "M ticks/s",
+         [(ls, (lambda m: lambda n, p: n / p[("read", m)] / 1e6)(mode), lbl)
+          for mode, lbl, ls in READ_PLOT_MODES], True),
     ]
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
     fig.suptitle(".ticks vs Parquet / Feather / bi5 / CSV  —  scaling with row count",
                  fontsize=14, fontweight="bold")
 
-    for ax, (title, unit, yof, log_y) in zip(axes.flat, panels):
-        for fmt in fmts:
-            ns = sorted(series[fmt])
-            xs, ys = [], []
-            for n in ns:
-                try:
-                    ys.append(yof(n, series[fmt][n]))
-                    xs.append(n)
-                except KeyError:
-                    pass  # metric absent for this format/N
-            if not xs:
-                continue
-            color, lw, marker = STYLE.get(fmt, ("#333333", 1.6, "o"))
-            ax.plot(xs, ys, marker=marker, color=color, linewidth=lw,
-                    markersize=5, label=fmt, zorder=3 if fmt in HILITE else 2)
+    for ax, (title, unit, series_specs, log_y) in zip(axes.flat, panels):
+        for linestyle, yof, _sub in series_specs:
+            for fmt in fmts:
+                ns = sorted(series[fmt])
+                xs, ys = [], []
+                for n in ns:
+                    try:
+                        ys.append(yof(n, series[fmt][n]))
+                        xs.append(n)
+                    except KeyError:
+                        pass  # metric absent for this format/N
+                if not xs:
+                    continue
+                color, lw, marker = STYLE.get(fmt, ("#333333", 1.6, "o"))
+                # Label only the solid series so the shared figure legend carries
+                # one entry per format, not one per (format, sub-point).
+                label = fmt if linestyle == "solid" else "_nolegend_"
+                ax.plot(xs, ys, marker=marker, color=color, linewidth=lw,
+                        linestyle=linestyle, markersize=5, label=label,
+                        zorder=3 if fmt in HILITE else 2)
         ax.set_title(title, fontsize=10)
         ax.set_ylabel(unit, fontsize=9)
         ax.set_xlabel("rows (N)", fontsize=9)
@@ -148,6 +170,14 @@ def plot():
             ax.set_yscale("log")
         ax.grid(which="both", alpha=0.3)
         ax.tick_params(labelsize=8)
+
+        # Per-panel legend distinguishing the sub-point line styles (insert/read).
+        subs = [(ls, sub) for ls, _yof, sub in series_specs if sub]
+        if subs:
+            proxies = [plt.Line2D([], [], color="#333333", linestyle=ls, label=sub)
+                       for ls, sub in subs]
+            ax.legend(handles=proxies, fontsize=7, loc="best",
+                      frameon=True, framealpha=0.6)
 
     # one shared legend below the panels
     handles, labels = axes.flat[0].get_legend_handles_labels()

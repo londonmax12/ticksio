@@ -193,7 +193,10 @@ static int scan_once(const char* path, double* out_s, uint64_t* out_count){
 
 /* read mode "materialize": decode into three N-sized int64 output arrays, the
  * head-to-head analog of the columnar formats decoding into numpy arrays. The
- * allocation of the output buffers is part of the cost, as it is for numpy. */
+ * allocation of the output buffers is part of the cost, as it is for numpy.
+ * Uses ticks_read_columns, which decodes each column straight into its array
+ * (no per-record struct, no row->column transpose) — the apples-to-apples match
+ * for combine_chunks + to_numpy on the columnar formats. */
 static int materialize_once(const char* path, uint64_t n, double* out_s, uint64_t* out_count){
     double t0=now_s();
     int64_t* ts=malloc(n*sizeof(int64_t));
@@ -203,15 +206,13 @@ static int materialize_once(const char* path, uint64_t n, double* out_s, uint64_
     ticks_file_t* r=NULL;
     if(ticks_open_read(path,&r)!=TICKS_OK){ fprintf(stderr,"open %s\n",path); free(ts);free(px);free(vol); return 1; }
     ticks_header_t h; ticks_get_header(r,&h);
-    ticks_iterator_t* it=NULL;
-    ticks_iterator_create(r,(int64_t)h.min_timestamp,(int64_t)h.max_timestamp+1,&it);
-    uint64_t c=0; trade_data_t rec;
-    while(ticks_iterator_next(it,&rec)==TICKS_OK && c<n){
-        ts[c]=(int64_t)rec.ms_since_epoch; px[c]=(int64_t)rec.price; vol[c]=(int64_t)rec.volume; c++;
-    }
-    ticks_iterator_destroy(it);
+    int64_t* cols[3]={ts,px,vol};
+    uint64_t c=0;
+    ticks_status_e st=ticks_read_columns(r,(int64_t)h.min_timestamp,(int64_t)h.max_timestamp+1,
+                                         cols,3,n,&c);
     ticks_close(r);
     free(ts); free(px); free(vol);
+    if(st!=TICKS_OK){ fprintf(stderr,"read_columns: %s\n",ticks_status_to_string(st)); return 1; }
     *out_s=now_s()-t0; *out_count=c;
     return 0;
 }

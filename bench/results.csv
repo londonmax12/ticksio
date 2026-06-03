@@ -1,52 +1,17 @@
 format,n,metric,variant,value
-ticks none,5000000,size,,20000198
-ticks none,5000000,write,,0.084485
-ticks none,5000000,encode,,0.084260
-ticks none,5000000,insert,1000,0.118168
-ticks none,5000000,insert,10000,0.085302
-ticks none,5000000,insert,100000,0.079928
-ticks none,5000000,read,scan,0.045033
-ticks none,5000000,read,materialize,0.075804
-ticks zstd,5000000,size,,6806179
-ticks zstd,5000000,write,,0.156400
-ticks zstd,5000000,encode,,0.156218
-ticks zstd,5000000,insert,1000,0.217735
-ticks zstd,5000000,insert,10000,0.166856
-ticks zstd,5000000,insert,100000,0.175545
-ticks zstd,5000000,read,scan,0.059876
-ticks zstd,5000000,read,materialize,0.087255
-parquet snappy,5000000,size,,25543932
-parquet snappy,5000000,write,,0.315955
-parquet snappy,5000000,insert,1000,0.916596
-parquet snappy,5000000,insert,10000,0.463946
-parquet snappy,5000000,insert,100000,0.426283
-parquet snappy,5000000,read,scan,0.051574
-parquet snappy,5000000,read,materialize,0.061767
-parquet zstd,5000000,size,,13117239
-parquet zstd,5000000,write,,0.331411
-parquet zstd,5000000,insert,1000,1.157426
-parquet zstd,5000000,insert,10000,0.582987
-parquet zstd,5000000,insert,100000,0.495045
-parquet zstd,5000000,read,scan,0.063268
-parquet zstd,5000000,read,materialize,0.070641
-feather zstd,5000000,size,,10354746
-feather zstd,5000000,write,,0.088577
-feather zstd,5000000,insert,1000,0.467407
-feather zstd,5000000,insert,10000,0.111612
-feather zstd,5000000,insert,100000,0.081180
-feather zstd,5000000,read,scan,0.061092
-feather zstd,5000000,read,materialize,0.088478
-bi5,5000000,size,,7987342
-bi5,5000000,write,,30.468443
-bi5,5000000,insert,1000,31.276526
-bi5,5000000,insert,10000,28.539565
-bi5,5000000,insert,100000,29.588089
-bi5,5000000,read,scan,0.698037
-bi5,5000000,read,materialize,0.760591
-csv,5000000,size,,120407831
-csv,5000000,write,,0.643641
-csv,5000000,insert,1000,0.829115
-csv,5000000,insert,10000,0.650878
-csv,5000000,insert,100000,0.628529
-csv,5000000,read,scan,0.633486
-csv,5000000,read,materialize,0.163042
+ticks none,2500000,size,,10000135
+ticks none,2500000,write,,0.060394
+ticks none,2500000,encode,,0.060154
+ticks none,2500000,insert,1000,0.079982
+ticks none,2500000,insert,10000,0.061673
+ticks none,2500000,insert,100000,0.053949
+ticks none,2500000,read,scan,0.028757
+ticks none,2500000,read,materialize,0.025889
+ticks zstd,2500000,size,,3403264
+ticks zstd,2500000,write,,0.101278
+ticks zstd,2500000,encode,,0.101070
+ticks zstd,2500000,insert,1000,0.158778
+ticks zstd,2500000,insert,10000,0.126053
+ticks zstd,2500000,insert,100000,0.127876
+ticks zstd,2500000,read,scan,0.042697
+ticks zstd,2500000,read,materialize,0.038694

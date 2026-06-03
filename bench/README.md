@@ -88,8 +88,10 @@ Even with all of that:
 | **read — materialize** | decode the **whole** file into contiguous N-sized native arrays and keep them. ticksio fills three N-sized `int64` arrays; the columnar formats `combine_chunks` + `to_numpy` per column. This is the head-to-head "load it all into memory" read. |
 
 The single-N run records the full insert curve and both read modes. The scaling
-sweep collapses each to one representative point per N (insert at the 100k batch,
-read in materialize mode) to keep the multi-N chart legible.
+sweep draws both endpoints of each per N — insert at the 1k (solid) and 100k
+(dashed) batch, read in scan (solid) and materialize (dashed) mode — so the
+multi-N chart tells the same story rather than collapsing to ticks' two weakest
+sub-points (the 100k insert batch, where feather catches it, and materialize).
 
 ## Caveats — read these before quoting the numbers
 
