@@ -1,8 +1,50 @@
-format,n,size_bytes,write_s,insert_s,read_s
-ticks none,5000000,20000198,0.070675,0.095766,0.047291
-ticks zstd,5000000,6806179,0.131175,0.185234,0.078028
-parquet snappy,5000000,25543932,0.270342,0.378977,0.049049
-parquet zstd,5000000,13117239,0.304105,0.415828,0.049263
-feather zstd,5000000,10354746,0.077834,0.078092,0.085583
-bi5,5000000,7987342,15.563909,15.515780,0.585387
-csv,5000000,120407831,0.354412,0.367122,0.092339
+format,n,metric,variant,value
+ticks none,5000000,size,,20000198
+ticks none,5000000,write,,0.075678
+ticks none,5000000,insert,1000,0.109915
+ticks none,5000000,insert,10000,0.076821
+ticks none,5000000,insert,100000,0.072931
+ticks none,5000000,read,scan,0.041833
+ticks none,5000000,read,materialize,0.069361
+ticks zstd,5000000,size,,6806179
+ticks zstd,5000000,write,,0.155309
+ticks zstd,5000000,insert,1000,0.215334
+ticks zstd,5000000,insert,10000,0.159934
+ticks zstd,5000000,insert,100000,0.166740
+ticks zstd,5000000,read,scan,0.052565
+ticks zstd,5000000,read,materialize,0.080614
+parquet snappy,5000000,size,,25543932
+parquet snappy,5000000,write,,0.340969
+parquet snappy,5000000,insert,1000,0.916938
+parquet snappy,5000000,insert,10000,0.471333
+parquet snappy,5000000,insert,100000,0.425505
+parquet snappy,5000000,read,scan,0.050104
+parquet snappy,5000000,read,materialize,0.070363
+parquet zstd,5000000,size,,13117239
+parquet zstd,5000000,write,,0.324274
+parquet zstd,5000000,insert,1000,1.138286
+parquet zstd,5000000,insert,10000,0.604081
+parquet zstd,5000000,insert,100000,0.487591
+parquet zstd,5000000,read,scan,0.066523
+parquet zstd,5000000,read,materialize,0.083947
+feather zstd,5000000,size,,10354746
+feather zstd,5000000,write,,0.080709
+feather zstd,5000000,insert,1000,0.469735
+feather zstd,5000000,insert,10000,0.114419
+feather zstd,5000000,insert,100000,0.088225
+feather zstd,5000000,read,scan,0.068337
+feather zstd,5000000,read,materialize,0.109794
+bi5,5000000,size,,7987342
+bi5,5000000,write,,20.664321
+bi5,5000000,insert,1000,29.464844
+bi5,5000000,insert,10000,29.265102
+bi5,5000000,insert,100000,30.533664
+bi5,5000000,read,scan,0.670325
+bi5,5000000,read,materialize,0.774177
+csv,5000000,size,,120407831
+csv,5000000,write,,0.566946
+csv,5000000,insert,1000,0.776322
+csv,5000000,insert,10000,0.623628
+csv,5000000,insert,100000,0.555838
+csv,5000000,read,scan,0.594897
+csv,5000000,read,materialize,0.116734

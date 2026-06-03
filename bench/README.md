@@ -22,12 +22,24 @@ round-trip all N records losslessly before timing. The one exception is bi5,
 which by design uses 32-bit fields and a per-file time offset (lossless on this
 dataset); see the caveat below.
 
+Every timed metric is reported **best-of-N** (minimum wall-clock over `REPS`
+runs, default 3) on **both** sides — the C ticks side and the pyarrow side use
+the same rule. A single cold run is dominated by cache/OS jitter; the
+steady-state minimum is the honest number. zstd level is **3** on every zstd
+path (ticksio's writer, Parquet, Feather), so the size comparison isn't skewed
+by mismatched compression effort.
+
 | metric | meaning |
 |--------|---------|
 | **size** | on-disk bytes (reported as bytes/tick) |
 | **write** | bulk: encode + write the whole dataset to disk in one call |
-| **insert** | streaming: write in batches via the format's incremental writer (Parquet/Feather are write-once — this is the closest live-append analog and is labelled as such) |
-| **read** | decode the whole file into the language's native in-memory form (ticksio iterates rows into C structs; the columnar formats decode into numpy arrays) |
+| **insert** | streaming: write in batches via the format's incremental writer, **swept across batch sizes (1k / 10k / 100k)** — insert throughput is a function of batch granularity, so the curve is the answer, not a single point. (Parquet/Feather are write-once; this is the closest live-append analog and is labelled as such.) |
+| **read — scan** | iterate the file's batches, decode each into native arrays and **discard** (bounded memory, no retained N-sized output). ticksio iterates rows into one reused C struct; the columnar formats iterate batches and drop them. |
+| **read — materialize** | decode the **whole** file into contiguous N-sized native arrays and keep them. ticksio fills three N-sized `int64` arrays; the columnar formats `combine_chunks` + `to_numpy` per column. This is the head-to-head "load it all into memory" read. |
+
+The single-N run records the full insert curve and both read modes. The scaling
+sweep collapses each to one representative point per N (insert at the 100k batch,
+read in materialize mode) to keep the multi-N chart legible.
 
 ## Caveats — read these before quoting the numbers
 
@@ -60,10 +72,10 @@ Requires the built library (`build/c/libticksio.a` + the fetched
 # 1. build the ticks side (generates data, times ticks, writes results.csv + out.csv)
 gcc -O2 -Isrc/c/include bench/bench.c build/c/libticksio.a \
     build/c/_deps/zstd-build/lib/libzstd.a -o bench/bench.exe
-./bench/bench.exe 5000000          # row count (default 5,000,000)
+./bench/bench.exe 5000000          # row count (default 5,000,000); optional 2nd arg = REPS (default 3)
 
 # 2. time Parquet / Feather / CSV on the identical rows (appends to results.csv)
-python bench/bench_py.py
+python bench/bench_py.py           # honours BENCH_REPS env var (default 3) to match the C side
 
 # 3. render the chart + markdown table
 python bench/chart.py

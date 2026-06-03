@@ -6,12 +6,14 @@ plot how each format scales with dataset size.
   python bench/scaling.py plot             # re-render from existing scaling.csv only
 
 For each N the driver runs `bench.exe N` (the ticks side + the shared out.csv)
-then `bench_py.py` (parquet / feather / bi5 / csv), reads the per-N
-bench/results.csv those produce, and accumulates every row — tagged with its N —
-into bench/scaling.csv. It then renders bench/scaling.png: a 2x2 panel of
+then `bench_py.py` (parquet / feather / bi5 / csv), reads the per-N tidy
+bench/results.csv those produce, and accumulates every row — already tagged with
+its N — into bench/scaling.csv. It then renders bench/scaling.png: a 2x2 panel of
 size + write/insert/read, each a multi-line chart (one line per format) against
-N on a log x-axis, so you can see how bytes/tick and throughput hold up (or don't)
-as the stream grows. The ticks lines are drawn bold/red to stand out.
+N on a log x-axis. The full single-N run measures an insert *curve* over batch
+size and *two* read modes; to keep the scaling view legible each panel collapses
+to one representative point per N — insert at the 100k batch, read in
+materialize mode — both noted in the panel titles. The ticks lines are bold/red.
 
 `bench.exe` must already be built (see bench/README.md); the sweep shells out to
 it once per N. The heavy `run` mode is separate from `plot` so the chart can be
@@ -29,11 +31,15 @@ RESULTS = os.path.join(HERE, "results.csv")
 SCALING = os.path.join(HERE, "scaling.csv")
 SCALING_PNG = os.path.join(HERE, "scaling.png")
 
+FIELDS = ["format", "n", "metric", "variant", "value"]
+
 # Geometric sweep: each step ~2-2.5x so the log x-axis is evenly spaced.
 DEFAULT_NS = [100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000]
 
-# Drawn in this order; ticks variants are highlighted. Formats absent from a run
-# are simply skipped, so trimming bench_py.py's `rows` list stays compatible.
+# Representative points collapsed from the full single-N run for the scaling view.
+INSERT_PLOT_BATCH = "100000"
+READ_PLOT_MODE = "materialize"
+
 ORDER = ["ticks zstd", "ticks none", "parquet zstd", "parquet snappy",
          "feather zstd", "bi5", "csv"]
 HILITE = {"ticks zstd", "ticks none"}
@@ -55,7 +61,6 @@ def sweep(ns):
     scaling.csv after every N — so the file always reflects completed points and
     a hang is obvious from the last line printed vs. the last N written.
     """
-    fields = ["format", "n", "size_bytes", "write_s", "insert_s", "read_s"]
     accumulated = []
     t_all = time.perf_counter()
     for idx, N in enumerate(ns, 1):
@@ -76,11 +81,11 @@ def sweep(ns):
 
         with open(RESULTS, newline="") as f:
             for r in csv.DictReader(f):
-                accumulated.append({k: r[k] for k in fields})
+                accumulated.append({k: r[k] for k in FIELDS})
 
         # Persist after every N so partial progress survives an interruption.
         with open(SCALING, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=fields)
+            w = csv.DictWriter(f, fieldnames=FIELDS)
             w.writeheader()
             w.writerows(accumulated)
         print(f"[{idx}/{len(ns)}] N={N:,}  COMPLETE in {time.perf_counter()-t_n:.1f}s  "
@@ -91,16 +96,12 @@ def sweep(ns):
 
 
 def load():
-    """Read scaling.csv into {format: [(n, size, write_s, insert_s, read_s), ...]}."""
+    """Read scaling.csv into {format: {n: {(metric, variant): value}}}."""
     series = {}
     with open(SCALING, newline="") as f:
         for r in csv.DictReader(f):
-            series.setdefault(r["format"], []).append((
-                int(r["n"]), int(r["size_bytes"]),
-                float(r["write_s"]), float(r["insert_s"]), float(r["read_s"]),
-            ))
-    for fmt in series:
-        series[fmt].sort()  # by N
+            fmt = series.setdefault(r["format"], {})
+            fmt.setdefault(int(r["n"]), {})[(r["metric"], r["variant"])] = float(r["value"])
     return series
 
 
@@ -108,16 +109,16 @@ def plot():
     series = load()
     fmts = [f for f in ORDER if f in series] + [f for f in series if f not in ORDER]
 
-    # panel -> a function turning a (n,size,w,i,r) point into the plotted y value.
+    # panel -> (title, unit, point->y, log_y). point is the per-N metric dict.
     panels = [
         ("Size  (bytes / tick — lower is better)", "bytes/tick",
-         lambda n, s, w, i, r: s / n, False),
-        ("Write throughput  (M ticks/s — higher is better)", "M ticks/s",
-         lambda n, s, w, i, r: n / w / 1e6, True),
-        ("Insert throughput  (streaming batches, M ticks/s)", "M ticks/s",
-         lambda n, s, w, i, r: n / i / 1e6, True),
-        ("Read throughput  (full scan, M ticks/s)", "M ticks/s",
-         lambda n, s, w, i, r: n / r / 1e6, True),
+         lambda n, p: p[("size", "")] / n, False),
+        ("Write throughput  (bulk, M ticks/s — higher is better)", "M ticks/s",
+         lambda n, p: n / p[("write", "")] / 1e6, True),
+        (f"Insert throughput  ({INSERT_PLOT_BATCH[:-3]}k batch, M ticks/s)", "M ticks/s",
+         lambda n, p: n / p[("insert", INSERT_PLOT_BATCH)] / 1e6, True),
+        (f"Read throughput  ({READ_PLOT_MODE}, M ticks/s)", "M ticks/s",
+         lambda n, p: n / p[("read", READ_PLOT_MODE)] / 1e6, True),
     ]
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
@@ -126,9 +127,16 @@ def plot():
 
     for ax, (title, unit, yof, log_y) in zip(axes.flat, panels):
         for fmt in fmts:
-            pts = series[fmt]
-            xs = [p[0] for p in pts]
-            ys = [yof(*p) for p in pts]
+            ns = sorted(series[fmt])
+            xs, ys = [], []
+            for n in ns:
+                try:
+                    ys.append(yof(n, series[fmt][n]))
+                    xs.append(n)
+                except KeyError:
+                    pass  # metric absent for this format/N
+            if not xs:
+                continue
             color, lw, marker = STYLE.get(fmt, ("#333333", 1.6, "o"))
             ax.plot(xs, ys, marker=marker, color=color, linewidth=lw,
                     markersize=5, label=fmt, zorder=3 if fmt in HILITE else 2)

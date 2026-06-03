@@ -3,9 +3,29 @@
  * the identical rows to CSV (for the Parquet/Feather side), and writes the
  * ticks rows of bench/results.csv. Not part of the CMake build.
  *
- *   write  = bulk: one ticks_add_data(all N) then close
- *   insert = streaming: many small ticks_add_data(batch) then close
- *   read   = full scan back through the range iterator
+ *   write    = bulk: one ticks_add_data(all N) then close.
+ *   insert   = streaming: many ticks_add_data(batch) then close. Swept across
+ *              batch sizes (1k / 10k / 100k) because insert throughput is a
+ *              function of batch granularity, not a single point.
+ *   read     = decode the whole file back, in two modes:
+ *                scan        — iterate every record into one reused struct and
+ *                              discard (bounded memory, no N-sized output).
+ *                materialize — decode into three N-sized int64 output arrays
+ *                              (head-to-head with the columnar formats' decode
+ *                              into numpy arrays).
+ *
+ * Every metric is reported best-of-REPS (min wall-clock): cold-run jitter
+ * dominates a single shot, and the steady-state number is the honest one. The
+ * Python side uses the same best-of-REPS rule on the identical rows.
+ *
+ * Output is the tidy long form `format,n,metric,variant,value`:
+ *   size       variant=""                       value=on-disk bytes
+ *   write      variant=""                       value=best-of seconds
+ *   insert     variant=<batch size>             value=best-of seconds
+ *   read       variant=scan|materialize         value=best-of seconds
+ * The Python side appends rows in the same shape.
+ *
+ * Usage:  bench.exe [N] [REPS]   (defaults: N=5,000,000  REPS=3)
  *
  * Build:
  *   gcc -O2 -Isrc/c/include bench/bench.c build/c/libticksio.a \
@@ -28,10 +48,15 @@ static uint64_t rng_state = 0x9e3779b97f4a7c15ULL;
 static uint64_t xrng(void){ uint64_t x=rng_state; x^=x<<13; x^=x>>7; x^=x<<17; rng_state=x; return x; }
 static uint32_t urange(uint32_t n){ return (uint32_t)(xrng()%n); }
 
-#define INSERT_BATCH 1000
+/* Insert (streaming) batch sizes swept to draw the granularity curve. Must match
+ * BATCHES in bench_py.py so the two sides report the same points. */
+static const uint64_t INSERT_BATCHES[] = { 1000, 10000, 100000 };
+#define N_INSERT_BATCHES (sizeof(INSERT_BATCHES)/sizeof(INSERT_BATCHES[0]))
 
-static int build(const char* path, compression_type_e c, trade_data_t* t, uint64_t n,
-                 int streaming, double* out_s) {
+/* One write of the whole stream. batch==0 -> bulk (single ticks_add_data);
+ * batch>0 -> streaming in fixed-size chunks. Returns 0 on success. */
+static int build_once(const char* path, compression_type_e c, trade_data_t* t,
+                      uint64_t n, uint64_t batch, double* out_s) {
     ticks_header_t h; memset(&h,0,sizeof(h));
     strcpy(h.ticker,"AAPL"); strcpy(h.currency,"USD"); strcpy(h.country,"US");
     h.asset_class=ASSET_CLASS_STOCK; h.schema_id=SCHEMA_TRADE;
@@ -41,9 +66,9 @@ static int build(const char* path, compression_type_e c, trade_data_t* t, uint64
     ticks_file_t* w=NULL;
     ticks_status_e s=ticks_new_file(path,&h,&w);
     if(s!=TICKS_OK||!w){ fprintf(stderr,"new_file: %s\n",ticks_status_to_string(s)); return 1; }
-    if(streaming){
-        for(uint64_t i=0;i<n;i+=INSERT_BATCH){
-            uint64_t b=(n-i<INSERT_BATCH)?(n-i):INSERT_BATCH;
+    if(batch){
+        for(uint64_t i=0;i<n;i+=batch){
+            uint64_t b=(n-i<batch)?(n-i):batch;
             s=ticks_add_data(w,t+i,b);
             if(s!=TICKS_OK){ fprintf(stderr,"add: %s\n",ticks_status_to_string(s)); return 1; }
         }
@@ -57,7 +82,23 @@ static int build(const char* path, compression_type_e c, trade_data_t* t, uint64
     return 0;
 }
 
-static int scan(const char* path, double* out_s, uint64_t* out_count){
+/* Best-of-reps build time (min). Each rep overwrites the same path with the
+ * identical, deterministic bytes; the first rep warms the OS file cache so the
+ * min is a steady-state number, not a cold one. */
+static int build_best(const char* path, compression_type_e c, trade_data_t* t,
+                      uint64_t n, uint64_t batch, int reps, double* out_s) {
+    double best=1e300;
+    for(int r=0;r<reps;r++){
+        double s;
+        if(build_once(path,c,t,n,batch,&s)) return 1;
+        if(s<best) best=s;
+    }
+    *out_s=best;
+    return 0;
+}
+
+/* read mode "scan": iterate every record into one reused struct and discard. */
+static int scan_once(const char* path, double* out_s, uint64_t* out_count){
     double t0=now_s();
     ticks_file_t* r=NULL;
     if(ticks_open_read(path,&r)!=TICKS_OK){ fprintf(stderr,"open %s\n",path); return 1; }
@@ -72,10 +113,48 @@ static int scan(const char* path, double* out_s, uint64_t* out_count){
     return 0;
 }
 
+/* read mode "materialize": decode into three N-sized int64 output arrays, the
+ * head-to-head analog of the columnar formats decoding into numpy arrays. The
+ * allocation of the output buffers is part of the cost, as it is for numpy. */
+static int materialize_once(const char* path, uint64_t n, double* out_s, uint64_t* out_count){
+    double t0=now_s();
+    int64_t* ts=malloc(n*sizeof(int64_t));
+    int64_t* px=malloc(n*sizeof(int64_t));
+    int64_t* vol=malloc(n*sizeof(int64_t));
+    if(!ts||!px||!vol){ fprintf(stderr,"oom materialize\n"); free(ts);free(px);free(vol); return 1; }
+    ticks_file_t* r=NULL;
+    if(ticks_open_read(path,&r)!=TICKS_OK){ fprintf(stderr,"open %s\n",path); free(ts);free(px);free(vol); return 1; }
+    ticks_header_t h; ticks_get_header(r,&h);
+    ticks_iterator_t* it=NULL;
+    ticks_iterator_create(r,(int64_t)h.min_timestamp,(int64_t)h.max_timestamp+1,&it);
+    uint64_t c=0; trade_data_t rec;
+    while(ticks_iterator_next(it,&rec)==TICKS_OK && c<n){
+        ts[c]=(int64_t)rec.ms_since_epoch; px[c]=(int64_t)rec.price; vol[c]=(int64_t)rec.volume; c++;
+    }
+    ticks_iterator_destroy(it);
+    ticks_close(r);
+    free(ts); free(px); free(vol);
+    *out_s=now_s()-t0; *out_count=c;
+    return 0;
+}
+
+static int scan_best(const char* path, int reps, double* out_s, uint64_t* out_count){
+    double best=1e300; uint64_t cnt=0;
+    for(int r=0;r<reps;r++){ double s; if(scan_once(path,&s,&cnt)) return 1; if(s<best) best=s; }
+    *out_s=best; *out_count=cnt; return 0;
+}
+static int materialize_best(const char* path, uint64_t n, int reps, double* out_s, uint64_t* out_count){
+    double best=1e300; uint64_t cnt=0;
+    for(int r=0;r<reps;r++){ double s; if(materialize_once(path,n,&s,&cnt)) return 1; if(s<best) best=s; }
+    *out_s=best; *out_count=cnt; return 0;
+}
+
 static long fsize(const char* p){ FILE* f=fopen(p,"rb"); if(!f)return -1; fseek(f,0,SEEK_END); long s=ftell(f); fclose(f); return s; }
 
 int main(int argc, char** argv){
     uint64_t n=(argc>1)?strtoull(argv[1],NULL,10):5000000ULL;
+    int reps=(argc>2)?atoi(argv[2]):3;
+    if(reps<1) reps=1;
     trade_data_t* ticks=malloc(n*sizeof(trade_data_t));
     if(!ticks){ fprintf(stderr,"oom\n"); return 1; }
 
@@ -100,18 +179,38 @@ int main(int argc, char** argv){
     };
 
     FILE* res=fopen("bench/results.csv","wb");
-    fputs("format,n,size_bytes,write_s,insert_s,read_s\n",res);
+    fputs("format,n,metric,variant,value\n",res);
 
     for(int k=0;k<2;k++){
-        double w_s,i_s,r_s; uint64_t cnt;
-        if(build(cfg[k].path,cfg[k].c,ticks,n,0,&w_s)) return 1;          /* bulk write */
-        long sz=fsize(cfg[k].path);
-        if(build(cfg[k].path,cfg[k].c,ticks,n,1,&i_s)) return 1;          /* streaming insert */
-        if(scan(cfg[k].path,&r_s,&cnt)) return 1;                          /* full read */
-        if(cnt!=n){ fprintf(stderr,"FAIL %s read %llu != %llu\n",cfg[k].name,(unsigned long long)cnt,(unsigned long long)n); return 1; }
-        fprintf(res,"%s,%" PRIu64 ",%ld,%.6f,%.6f,%.6f\n",cfg[k].name,n,sz,w_s,i_s,r_s);
-        printf("%-12s size=%9ld  write=%.3fs insert=%.3fs read=%.3fs  (%llu ok)\n",
-               cfg[k].name,sz,w_s,i_s,r_s,(unsigned long long)cnt);
+        const char* name=cfg[k].name; const char* path=cfg[k].path;
+
+        double w_s;                                                  /* bulk write */
+        if(build_best(path,cfg[k].c,ticks,n,0,reps,&w_s)) return 1;
+        long sz=fsize(path);
+
+        double ins_s[N_INSERT_BATCHES];                              /* insert sweep */
+        for(size_t bi=0;bi<N_INSERT_BATCHES;bi++)
+            if(build_best(path,cfg[k].c,ticks,n,INSERT_BATCHES[bi],reps,&ins_s[bi])) return 1;
+
+        double scan_s,mat_s; uint64_t c1,c2;                         /* two read modes */
+        if(scan_best(path,reps,&scan_s,&c1)) return 1;
+        if(materialize_best(path,n,reps,&mat_s,&c2)) return 1;
+        if(c1!=n||c2!=n){
+            fprintf(stderr,"FAIL %s read %llu/%llu != %llu\n",name,
+                    (unsigned long long)c1,(unsigned long long)c2,(unsigned long long)n);
+            return 1;
+        }
+
+        fprintf(res,"%s,%" PRIu64 ",size,,%ld\n",name,n,sz);
+        fprintf(res,"%s,%" PRIu64 ",write,,%.6f\n",name,n,w_s);
+        for(size_t bi=0;bi<N_INSERT_BATCHES;bi++)
+            fprintf(res,"%s,%" PRIu64 ",insert,%" PRIu64 ",%.6f\n",name,n,INSERT_BATCHES[bi],ins_s[bi]);
+        fprintf(res,"%s,%" PRIu64 ",read,scan,%.6f\n",name,n,scan_s);
+        fprintf(res,"%s,%" PRIu64 ",read,materialize,%.6f\n",name,n,mat_s);
+
+        printf("%-12s size=%9ld  write=%.3fs  insert[1k/10k/100k]=%.3f/%.3f/%.3f  "
+               "read[scan/mat]=%.3f/%.3f  (%llu ok)\n",
+               name,sz,w_s,ins_s[0],ins_s[1],ins_s[2],scan_s,mat_s,(unsigned long long)n);
     }
     fclose(res);
 
